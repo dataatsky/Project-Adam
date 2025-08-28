@@ -1,0 +1,9 @@
+requests
+flask
+sentence-transformers
+pinecone-client
+pandas
+matplotlib
+seaborn
+ollama
+streamlit
