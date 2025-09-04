@@ -16,6 +16,7 @@ import sys # Needed to redirect stdout
 from pinecone import Pinecone
 from sentence_transformers import SentenceTransformer
 from text_world import TextWorld
+from flask import Flask, jsonify
 
 
 # --- CONFIGURATION ---
@@ -31,8 +32,9 @@ LOG_HEADERS = [
     "sensory_events", "resonant_memories", "impulses", "chosen_action", "action_result"
 ]
 
+
 # --- INITIALIZATION ---
-print("Initializing Cognitive Loop (GUI Version)...")
+print("Initializing Cognitive Loop Server...")
 model = SentenceTransformer('all-MiniLM-L6-v2')
 print("Model loaded.")
 
@@ -71,38 +73,26 @@ def pre_populate_foundational_memories():
 
 
 class CognitiveLoop:
-    def __init__(self, log_filename, log_headers, status_callback):
+    def __init__(self, log_filename, log_headers):
         self.agent_status = {
             "emotional_state": {"mood": "neutral", "level": 0.1},
             "personality": {"curiosity": 0.8, "bravery": 0.6, "caution": 0.7},
             "needs": {"hunger": 0.1},
             "goal": "Find the source of the strange noises in the house."
         }
-        self.status_callback = status_callback
         try:
             self.memory_id_counter = index.describe_index_stats().get('total_vector_count', 0)
         except Exception as e:
             self.memory_id_counter = 0
         
-        self.current_mood = "neutral"
-        self.mood_intensity = 0.1
-        self.last_action_reasoning = "Initializing..."
-        self.latest_memory = "No memories yet."
         self.is_running = True
         self.last_resonant_memories = []
-        # --- FIXED AttributeError ---
-        # Initialize the recent_memories list here.
         self.recent_memories = []
         self.log_filename = log_filename
         self.log_headers = log_headers
         self.current_world_state = {}
-        self.raw_impulses = []
-        self.hypothetical_outcomes = []
-        self.chosen_action = {}
-
-    def set_status(self, message):
-        """Callback to update the GUI status bar."""
-        self.status_callback(message)
+        self.current_mood = "neutral"
+        self.mood_intensity = 0.1
 
     def log_cycle_data(self, cycle_data):
         try:
@@ -113,18 +103,15 @@ class CognitiveLoop:
             print(f"Error writing to log file: {e}")
     
     def observe(self, world_state):
-        self.set_status("Observing...")
         print("\n--- 1. OBSERVING ---")
         print(f"Received world state: {json.dumps(world_state, indent=2)}")
         self.current_world_state = world_state
         return world_state
 
     def orient(self, world_state):
-        self.set_status("Orienting (Subconscious)...")
         print("\n--- 2. ORIENTING (Subconscious) ---")
         sensory_events = world_state.get('sensory_events', [])
-        if not sensory_events: return None
-
+        
         query_text = " ".join([f"{e['type']} of {e['object']} which is {e['details']}" for e in sensory_events if 'object' in e])
         
         if not query_text:
@@ -148,21 +135,19 @@ class CognitiveLoop:
         try:
             response = requests.post(f"{PSYCHE_LLM_API_URL}/generate_impulse", json=payload)
             response.raise_for_status()
-            impulses = response.json()
-            self.raw_impulses = impulses.get('impulses', [])
-            return impulses
+            return response.json()
         except requests.exceptions.RequestException as e:
-            print(f"Error communicating with Psyche-LLM: {e}")
+            print(f"Error communicating with Psyche-LLM's /generate_impulse: {e}")
             return None
 
     def imagine_and_reflect(self, initial_impulses, world):
-        self.set_status("Imagining & Reflecting...")
         print("\n--- 2.5. IMAGINING & REFLECTING ---")
         
-        self.hypothetical_outcomes = []
+        hypothetical_outcomes = []
         top_impulses = sorted(initial_impulses.get('impulses', []), key=lambda x: x.get('urgency', 0), reverse=True)[:3]
 
         for impulse in top_impulses:
+            if not isinstance(impulse, dict): continue
             action = {"verb": impulse.get("verb"), "target": impulse.get("target")}
             
             try:
@@ -174,19 +159,21 @@ class CognitiveLoop:
             cloned_world = world.clone()
             simulated_result = cloned_world.process_action(action)
             
-            self.hypothetical_outcomes.append({
-                "action": f"{action['verb']}_{action['target']}",
+            # DEFINITIVE FIX: Pass the action as a dictionary for clarity.
+            hypothetical_outcomes.append({
+                "action": action,
                 "imagined": imagined_outcome,
                 "simulated": simulated_result.get("reason")
             })
 
         payload = {
             "current_state": self.agent_status,
-            "hypothetical_outcomes": self.hypothetical_outcomes,
+            "hypothetical_outcomes": hypothetical_outcomes,
             "recent_memories": self.recent_memories
         }
         try:
             response = requests.post(f"{PSYCHE_LLM_API_URL}/reflect", json=payload)
+            response.raise_for_status()
             reflection_result = response.json()
             print(f"Reflection Result: {reflection_result.get('reasoning')}")
             return reflection_result
@@ -194,19 +181,12 @@ class CognitiveLoop:
             print(f"Error during reflection: {e}")
             return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "My mind is blank."}
 
-
     def decide(self, final_action, reasoning):
-        self.set_status("Deciding...")
         print("\n--- 3. DECIDING ---")
-        
-        self.chosen_action = final_action
-        self.last_action_reasoning = reasoning
-
-        print(f"Final Chosen Action: {self.chosen_action}")
-        return self.chosen_action, reasoning
+        print(f"Final Chosen Action: {final_action}")
+        return final_action, reasoning
 
     def act(self, world, action, reasoning, world_state, impulses):
-        self.set_status("Acting...")
         print("\n--- 4. ACTING ---")
         action_result = world.process_action(action)
         print(f"Action Result: {action_result}")
@@ -217,17 +197,13 @@ class CognitiveLoop:
 
         sensed_objects = [e['object'] for e in world_state.get('sensory_events', []) if 'object' in e]
         sensed_str = f"I sensed {', '.join(sensed_objects)}." if sensed_objects else "I sensed nothing out of the ordinary."
-
-        decision_str = f"I decided to {action['verb']}." if action['target'] == 'null' else f"I decided to {action['verb']} the {action['target']}."
-
+        decision_str = f"I decided to {action['verb']}." if action.get('target') == 'null' else f"I decided to {action['verb']} the {action['target']}."
         result_reason = action_result.get('reason', 'it just happened.')
         if action_result.get('success'):
             event_description = f"I was in the {world.agent_location}. {sensed_str} My emotional state became {self.current_mood}. {decision_str} The result was: {result_reason}"
         else:
             event_description = f"I was in the {world.agent_location}. {sensed_str} My emotional state became {self.current_mood}. {decision_str} But it failed because {result_reason}"
 
-        self.latest_memory = event_description
-        
         self.recent_memories.append(event_description)
         if len(self.recent_memories) > 5: self.recent_memories.pop(0)
 
@@ -258,7 +234,6 @@ class CognitiveLoop:
     def run_loop(self):
         text_world = TextWorld()
         while self.is_running:
-            self.set_status("Updating world...")
             text_world.update()
             self.agent_status['needs']['hunger'] = min(1, self.agent_status['needs']['hunger'] + 0.005)
 
@@ -282,133 +257,29 @@ class CognitiveLoop:
                 action, reasoning = self.decide(final_action, reasoning)
                 self.act(text_world, action, reasoning, full_world_state, initial_impulses)
             else:
-                print("\nOrient phase failed or returned no impulses. Skipping cycle.")
+                print("\nOrient phase failed or returned no impulses. Deciding to wait.")
+                action = {"verb": "wait", "target": "null"}
+                self.act(text_world, action, "No impulses", full_world_state, {})
 
-            self.set_status("Idle...")
             print("\n--- Cycle Complete. Waiting for next perception... ---")
             time.sleep(5)
 
-class PsycheMonitor:
-    def __init__(self, root, cognitive_loop):
-        self.root = root
-        self.cognitive_loop = cognitive_loop
-        self.root.title("Adam's Psyche Monitor")
-        self.root.geometry("1200x800")
-        
-        # --- Main Layout ---
-        main_pane = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
-        main_pane.pack(fill=tk.BOTH, expand=True)
-        
-        left_pane = ttk.PanedWindow(main_pane, orient=tk.VERTICAL)
-        right_frame = ttk.Labelframe(main_pane, text="Live Console Log", padding=10)
-        main_pane.add(left_pane, weight=2)
-        main_pane.add(right_frame, weight=1)
+# --- Flask Server for the Visualizer ---
+app = Flask(__name__)
+adam_brain = None
 
-        # --- Left Pane ---
-        vitals_frame = ttk.Labelframe(left_pane, text="Vitals", padding=10)
-        mind_frame = ttk.Labelframe(left_pane, text="Mind State", padding=10)
-        left_pane.add(vitals_frame, weight=1)
-        left_pane.add(mind_frame, weight=4)
+@app.route('/get_state', methods=['GET'])
+def get_state():
+    """Provides Adam's current state to the visualizer."""
+    if adam_brain:
+        return jsonify({
+            "location": adam_brain.current_world_state.get('agent_location', 'unknown'),
+            "mood": adam_brain.agent_status['emotional_state']['mood']
+        })
+    return jsonify({"error": "Cognitive loop not running"}), 500
 
-        # Vitals
-        self.mood_label = ttk.Label(vitals_frame, text="Current Mood: neutral", font=("Helvetica", 14))
-        self.mood_label.grid(row=0, column=0, padx=10, sticky="w")
-        self.intensity_bar = ttk.Progressbar(vitals_frame, orient="horizontal", length=200, mode="determinate")
-        self.intensity_bar.grid(row=0, column=1, padx=10, sticky="ew")
-        self.hunger_label = ttk.Label(vitals_frame, text="Hunger: 10%", font=("Helvetica", 14))
-        self.hunger_label.grid(row=1, column=0, padx=10, sticky="w")
-        self.hunger_bar = ttk.Progressbar(vitals_frame, orient="horizontal", length=200, mode="determinate")
-        self.hunger_bar.grid(row=1, column=1, padx=10, sticky="ew")
-        vitals_frame.columnconfigure(1, weight=1)
-
-        # Mind State
-        mind_notebook = ttk.Notebook(mind_frame)
-        mind_notebook.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        tab1 = ttk.Frame(mind_notebook)
-        tab2 = ttk.Frame(mind_notebook)
-        tab3 = ttk.Frame(mind_notebook)
-        mind_notebook.add(tab1, text="Subconscious")
-        mind_notebook.add(tab2, text="Imagination")
-        mind_notebook.add(tab3, text="Conscious Decision")
-
-        # Tab 1: Subconscious
-        ttk.Label(tab1, text="Raw Impulses (Verb | Target | Drive | Urgency):").pack(anchor='w')
-        self.impulses_list = tk.Listbox(tab1)
-        self.impulses_list.pack(fill=tk.BOTH, expand=True)
-
-        # Tab 2: Imagination
-        ttk.Label(tab2, text="Hypothetical Plans & Outcomes:").pack(anchor='w')
-        self.imagination_text = ScrolledText(tab2, wrap=tk.WORD, state=tk.DISABLED)
-        self.imagination_text.pack(fill=tk.BOTH, expand=True)
-
-        # Tab 3: Conscious Decision
-        self.reasoning_label = ttk.Label(tab3, text="Reasoning: Initializing...", wraplength=750, justify=tk.LEFT, font=("Helvetica", 12, "italic"))
-        self.reasoning_label.pack(pady=10, anchor='w')
-        self.memory_text = ScrolledText(tab3, height=8, wrap=tk.WORD, state=tk.DISABLED)
-        self.memory_text.pack(fill=tk.BOTH, expand=True)
-
-        # --- Right Pane: Live Log ---
-        self.log_text = ScrolledText(right_frame, wrap=tk.WORD, state=tk.DISABLED)
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-
-        # --- Status Bar ---
-        self.status_bar = ttk.Label(root, text="Initializing...", anchor='w', relief=tk.SUNKEN)
-        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.update_gui()
-
-    def update_gui(self):
-        # Vitals
-        self.mood_label.config(text=f"Current Mood: {self.cognitive_loop.current_mood.capitalize()}")
-        self.intensity_bar['value'] = self.cognitive_loop.mood_intensity * 100
-        hunger_val = self.cognitive_loop.agent_status['needs']['hunger']
-        self.hunger_label.config(text=f"Hunger: {hunger_val:.0%}")
-        self.hunger_bar['value'] = hunger_val * 100
-        
-        # Subconscious Tab
-        self.impulses_list.delete(0, tk.END)
-        for impulse in self.cognitive_loop.raw_impulses:
-            display_str = f"{impulse.get('verb', 'N/A')} | {impulse.get('target', 'N/A')} | {impulse.get('drive', 'N/A')} | {impulse.get('urgency', 0):.2f}"
-            self.impulses_list.insert(tk.END, display_str)
-
-        # Imagination Tab
-        self.imagination_text.config(state=tk.NORMAL)
-        self.imagination_text.delete('1.0', tk.END)
-        for outcome in self.cognitive_loop.hypothetical_outcomes:
-            self.imagination_text.insert(tk.END, f"Action: {outcome['action']}\n")
-            self.imagination_text.insert(tk.END, f"  - Imagined: {outcome['imagined']}\n")
-            self.imagination_text.insert(tk.END, f"  - Simulated: {outcome['simulated']}\n\n")
-        self.imagination_text.config(state=tk.DISABLED)
-
-        # Conscious Decision Tab
-        self.reasoning_label.config(text=f"Reasoning: {self.cognitive_loop.last_action_reasoning}")
-        self.memory_text.config(state=tk.NORMAL)
-        self.memory_text.delete('1.0', tk.END)
-        self.memory_text.insert(tk.END, f"Latest Memory Formed:\n\n{self.cognitive_loop.latest_memory}")
-        self.memory_text.config(state=tk.DISABLED)
-        
-        self.root.after(500, self.update_gui)
-
-    def on_closing(self):
-        print("--- GUI closing, shutting down cognitive loop. ---")
-        self.cognitive_loop.is_running = False
-        self.root.destroy()
-
-# A class to redirect stdout to the GUI
-class TextRedirector(object):
-    def __init__(self, widget):
-        self.widget = widget
-
-    def write(self, str):
-        self.widget.config(state=tk.NORMAL)
-        self.widget.insert(tk.END, str)
-        self.widget.see(tk.END)
-        self.widget.config(state=tk.DISABLED)
-    
-    def flush(self):
-        pass
+def run_flask_app():
+    app.run(port=8080)
 
 if __name__ == "__main__":
     if not os.path.exists(LOG_FILE):
@@ -419,19 +290,10 @@ if __name__ == "__main__":
     
     pre_populate_foundational_memories()
     
-    root = tk.Tk()
-    
-    # Create the cognitive loop and pass it the status bar update function
-    def update_status(message):
-        root.after(0, lambda: app.status_bar.config(text=message))
-
-    adam_brain = CognitiveLoop(LOG_FILE, LOG_HEADERS, update_status)
-    app = PsycheMonitor(root, adam_brain)
-    
-    # Redirect stdout to the log widget in the GUI
-    sys.stdout = TextRedirector(app.log_text)
+    adam_brain = CognitiveLoop(LOG_FILE, LOG_HEADERS)
     
     loop_thread = threading.Thread(target=adam_brain.run_loop, daemon=True)
     loop_thread.start()
     
-    root.mainloop()
+    print("--- Cognitive Loop Server is running. State available at http://127.0.0.1:8080/get_state ---")
+    run_flask_app()

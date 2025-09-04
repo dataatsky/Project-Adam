@@ -22,7 +22,7 @@ The JSON object must contain two keys: "emotional_shift" and "impulses".
 Combine a verb from the VERB TOOLBOX with a noun from the PERCEIVABLE OBJECTS list to form an action. Be creative.
 
 VERB TOOLBOX:
-- "wait", "go", "examine", "open", "close", "read", "eat", "answer", "ignore", "turn_on", "turn_off", "investigate", "sleep"
+- "wait", "go", "examine", "open", "close", "read", "eat_from_fridge", "answer", "ignore", "turn_on", "turn_off", "investigate", "sleep"
 """
 
 IMAGINATION_PROMPT = """
@@ -33,7 +33,7 @@ CONSCIOUS_MIND_PROMPT = """
 You are the conscious, rational mind of an AI agent named Adam. Your purpose is to reflect on a series of hypothetical plans and make a final, logical decision. You must respond ONLY with a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
 
 The JSON object must contain two keys: "final_action" (an object with "verb" and "target" keys) and "reasoning" (string).
-- "final_action" must be ONE of the actions from the hypothetical plans.
+- "final_action" must be ONE of the action objects from the hypothetical plans.
 - "reasoning" must be a brief, first-person explanation for your choice, considering your long-term goal and current emotional state.
 
 Analyze the situation provided. For each potential action, you have an "imagined" outcome (what you thought would happen) and a "simulated" outcome (what the world's physics say would actually happen).
@@ -80,7 +80,9 @@ def generate_reflection_prompt(data):
 
     prompt += "\n## Hypothetical Plans:\n"
     for outcome in hypothetical_outcomes:
-        prompt += f"- Action: {outcome['action']}\n"
+        # DEFINITIVE FIX: Format the action clearly for the LLM.
+        action = outcome.get('action', {})
+        prompt += f"- Action: verb='{action.get('verb')}', target='{action.get('target')}'\n"
         prompt += f"  - I imagined: '{outcome['imagined']}'\n"
         prompt += f"  - The simulation said: '{outcome['simulated']}'\n"
 
@@ -93,8 +95,6 @@ def generate_impulse():
         data = request.json
         user_prompt = generate_user_prompt(data)
         
-        print("--- Sending prompt to Ollama (Subconscious) ---")
-        
         response = ollama.chat(
             model=OLLAMA_MODEL,
             messages=[
@@ -104,12 +104,8 @@ def generate_impulse():
             options={"temperature": 0.8},
             format="json"
         )
-        
         llm_json_output = json.loads(response['message']['content'])
-        
-        print("--- Received JSON from Ollama (Subconscious) ---")
         return jsonify(llm_json_output)
-
     except Exception as e:
         print(f"An error occurred in /generate_impulse: {e}")
         return jsonify({"error": str(e)}), 500
@@ -121,8 +117,6 @@ def imagine():
         action = data.get('action', {})
         user_prompt = f"Hypothetical action: I will {action.get('verb')} the {action.get('target')}. What is the most likely outcome?"
         
-        print("--- Sending prompt to Ollama (Imagination) ---")
-        
         response = ollama.chat(
             model=OLLAMA_MODEL,
             messages=[
@@ -132,12 +126,8 @@ def imagine():
             options={"temperature": 0.7},
             format="json"
         )
-        
         llm_json_output = json.loads(response['message']['content'])
-        
-        print("--- Received JSON from Ollama (Imagination) ---")
         return jsonify(llm_json_output)
-
     except Exception as e:
         print(f"An error occurred in /imagine: {e}")
         return jsonify({"error": str(e)}), 500
@@ -148,8 +138,6 @@ def reflect():
         data = request.json
         user_prompt = generate_reflection_prompt(data)
         
-        print("--- Sending prompt to Ollama (Conscious Mind) ---")
-        
         response = ollama.chat(
             model=OLLAMA_MODEL,
             messages=[
@@ -159,18 +147,14 @@ def reflect():
             options={"temperature": 0.5},
             format="json"
         )
-        
         llm_json_output = json.loads(response['message']['content'])
-        
-        print("--- Received JSON from Ollama (Conscious Mind) ---")
         return jsonify(llm_json_output)
-
     except Exception as e:
         print(f"An error occurred in /reflect: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == '__main__':
     print("--- Psyche-LLM (Ollama Edition with Imagination Engine) is running ---")
     print(f"--- Using model: {OLLAMA_MODEL} ---")
     app.run(port=5000)
+
