@@ -6,7 +6,9 @@ class TextWorld:
     def __init__(self):
         """Initializes the state of the text-based world."""
         self.agent_location = "living_room"
+        self.hunger = 0.2  # 0.0 (not hungry) to 1.0 (very hungry)
         self.world_time = 0
+        self.mood_intensity = 0.4  # 0.0 (calm) to 1.0 (agitated)
         self.world_state = {
             "living_room": {
                 "phone": {"state": "idle", "properties": ["answerable"]},

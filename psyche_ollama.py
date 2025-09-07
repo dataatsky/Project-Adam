@@ -41,6 +41,24 @@ Analyze the situation provided. For each potential action, you have an "imagined
 **Crucially, if you see that a hypothetical action has repeatedly failed in your recent memories, you must acknowledge this pattern. Your reasoning should reflect this frustration, and you should choose a *different* action to try and break the loop.** Choose the action with the best outcome that aligns with your goals.
 """
 
+def safe_json_loads(raw):
+    """Tolerant JSON loader: extract first {...} if raw contains noise.
+    Fixed to avoid recursion and to return a dict on failure."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        import json
+        return json.loads(raw)
+    except Exception:
+        try:
+            start = raw.index("{")
+            end = raw.rindex("}") + 1
+            candidate = raw[start:end]
+            return json.loads(candidate)
+        except Exception:
+            return {}
 def generate_user_prompt(data):
     """Builds the user prompt string for the subconscious."""
     world_state = data.get('world_state', {})
@@ -105,7 +123,7 @@ def generate_impulse():
             format="json"
         )
         
-        llm_json_output = json.loads(response['message']['content'])
+        llm_json_output = safe_json_loads(response['message']['content'])
         
         print("--- Received JSON from Ollama (Subconscious) ---")
         return jsonify(llm_json_output)
@@ -133,7 +151,7 @@ def imagine():
             format="json"
         )
         
-        llm_json_output = json.loads(response['message']['content'])
+        llm_json_output = safe_json_loads(response['message']['content'])
         
         print("--- Received JSON from Ollama (Imagination) ---")
         return jsonify(llm_json_output)
@@ -160,7 +178,7 @@ def reflect():
             format="json"
         )
         
-        llm_json_output = json.loads(response['message']['content'])
+        llm_json_output = safe_json_loads(response['message']['content'])
         
         print("--- Received JSON from Ollama (Conscious Mind) ---")
         return jsonify(llm_json_output)
