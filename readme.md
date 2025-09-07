@@ -77,7 +77,7 @@ flowchart LR
     O[Observe] --> R["Orient\n(Memories + Impulses)"]
     R --> I["Imagine & Reflect\n(Simulated + LLM outcomes)"]
     I --> D["Decide\n(Final Action + Reasoning)"]
-    D --> A[Act in TextWorld]
+    D --> A["Act in TextWorld"]
     A --> M["Memory Formation\n(CSV + Pinecone)"]
     M --> O
 ```
