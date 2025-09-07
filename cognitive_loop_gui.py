@@ -36,9 +36,9 @@ from text_world import TextWorld
 load_dotenv(".env")
 PSYCHE_LLM_API_URL = "http://127.0.0.1:5000/"
 PPI_KEY = os.getenv("PINECONE")
-PINECONE_ENVIRONMENT = "us-east-1"
-PINECONE_INDEX_NAME = "project-adam-memory-text"
-LOG_FILE = "adam_behavior_log.csv"
+PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+LOG_FILE = os.getenv("LOG_FILE")
 
 LOG_HEADERS = [
     "timestamp", "cycle_num", "experiment_tag", "agent_id", "world_time", "location", "mood", "mood_intensity",
@@ -50,15 +50,25 @@ LOG_HEADERS = [
 # Vector memory bootstrap
 # --------------------
 print("Initializing Cognitive Loop Server…")
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer(os.getenv("SENTENCE_MODEL"))
 print("Model loaded.")
 
 pc = Pinecone(api_key=PPI_KEY, environment=PINECONE_ENVIRONMENT)
-if PINECONE_INDEX_NAME not in pc.list_indexes().names():
-    print(f"Creating Pinecone index: {PINECONE_INDEX_NAME}")
-    pc.create_index(name=PINECONE_INDEX_NAME, dimension=384, metric="cosine")
-index = pc.Index(PINECONE_INDEX_NAME)
-print("Pinecone connection established.")
+try:
+    # New SDKs return a list directly
+    try:
+        indexes = pc.list_indexes().names()
+    except Exception:
+        indexes = pc.list_indexes()
+    if PINECONE_INDEX_NAME not in indexes:
+        print(f"Creating Pinecone index: {PINECONE_INDEX_NAME}")
+        pc.create_index(name=PINECONE_INDEX_NAME, dimension=384, metric="cosine")
+    index = pc.Index(PINECONE_INDEX_NAME)
+    print("Pinecone connection established.")
+except Exception as e:
+    print(f"⚠️ Pinecone init failed: {e}")
+    index = None
+
 
 FOUNDATIONAL_MEMORIES = [
     "As a child, the sound of a phone ringing often meant bad news, making me feel anxious.",
@@ -77,10 +87,7 @@ def pre_populate_foundational_memories():
         vectors = []
         for i, text in enumerate(FOUNDATIONAL_MEMORIES):
             vec = model.encode(text).tolist()
-            meta = {"text": text, "timestamp": time.time(),
-            "cycle_num": self.cycle_counter,
-            "experiment_tag": self.experiment_tag,
-            "agent_id": self.agent_id, "type": "foundational"}
+            meta = {"text": text, "timestamp": time.time(), "type": "foundational"}
             vectors.append((str(i), vec, meta))
         index.upsert(vectors=vectors)
         print(f"— Added {len(vectors)} foundational memories.")
@@ -649,15 +656,15 @@ class CognitiveLoop:
             "location": world.agent_location,
             "mood": self.current_mood,
             "mood_intensity": self.mood_intensity,
-            "sensory_events": json.dumps(world_state.get('sensory_events', [])),
-            "resonant_memories": json.dumps(self.last_resonant_memories),
-            "impulses": json.dumps(imps),
+            "sensory_events": json.dumps(world_state.get('sensory_events', []), ensure_ascii=False),
+            "resonant_memories": json.dumps(self.last_resonant_memories, ensure_ascii=False),
+            "impulses": json.dumps(imps, ensure_ascii=False),
             "chosen_action": f"{action.get('verb')}_{action.get('target')}",
-            "action_result": json.dumps(result),
-            "imagined_outcomes": json.dumps([h.get("imagined","") for h in self.last_hypothetical]),
-            "simulated_outcomes": json.dumps([h.get("simulated","") for h in self.last_hypothetical]),
-            "emotional_delta": json.dumps(emotional_delta),
-            "kpis": json.dumps(kpis),
+            "action_result": json.dumps(result, ensure_ascii=False),
+            "imagined_outcomes": json.dumps([h.get("imagined","") for h in self.last_hypothetical], ensure_ascii=False),
+            "simulated_outcomes": json.dumps([h.get("simulated","") for h in self.last_hypothetical], ensure_ascii=False),
+            "emotional_delta": json.dumps(emotional_delta, ensure_ascii=False),
+            "kpis": json.dumps(kpis, ensure_ascii=False),
             "snapshot": json.dumps({
                 "triggers": triggers,
                 "top_impulses": sorted(imps, key=lambda x: x.get('urgency',0), reverse=True)[:3],
@@ -665,7 +672,7 @@ class CognitiveLoop:
                 "simulated": result.get('reason',''),
                 "emotional_delta": emotional_delta,
                 "kpis": kpis
-            })
+            }, ensure_ascii=False)
         }
         self.log_cycle_data(cycle_data)
         self._ui_vitals()
@@ -680,6 +687,18 @@ class CognitiveLoop:
             full = self.observe(ws)
             impulses = self.orient(full)
             if impulses:
+                shift = impulses.get("emotional_shift", {})
+                if shift:
+                    mood = shift.get("mood")
+                    if mood:
+                        self.agent_status["emotional_state"]["mood"] = mood
+                        self.current_mood = mood
+                    d = shift.get("level_delta", 0)
+                    lvl = self.agent_status["emotional_state"].get("level", 0.1)
+                    lvl = max(0.0, min(1.0, lvl + d))
+                    self.agent_status["emotional_state"]["level"] = lvl
+                    self.mood_intensity = lvl
+
                 reflection = self.imagine_and_reflect(impulses, world)
                 final_action = reflection.get('final_action', {'verb':'wait','target':'null'})
                 reasoning = reflection.get('reasoning','I am unsure.')
@@ -718,7 +737,6 @@ class TextRedirector:
             # Always update widgets on the Tk main thread
             self.widget.after(0, self._append, s)
         except Exception:
-            # Widget may be already destroyed during shutdown
             pass
 
     def flush(self):  # needed by some streams
@@ -747,7 +765,7 @@ if __name__ == "__main__":
     root.after(100, pump)
 
     # Redirect stdout to GUI log
-    sys.stdout = TextRedirector(app_gui.append_log)
+    sys.stdout = TextRedirector(app_gui.log_text)
 
     # Start cognitive loop
     adam_brain = CognitiveLoop(LOG_FILE, LOG_HEADERS, ui=app_gui)
