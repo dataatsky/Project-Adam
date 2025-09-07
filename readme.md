@@ -40,6 +40,9 @@ Unlike traditional scripted NPCs, Adam’s actions are **not hard-coded**. Inste
 
 The goal is to model **free-will-like behavior**, where Adam develops habits and personality traits organically over time.
 
+This project was born as an effort to represent the episode Hotel Reverie from Black Mirror series. In this episode, Brandy Friday, a top actor, agrees to star in a high-tech remake of the 1940s romance Hotel Reverie on the condition she plays a gender-swapped version of the male lead. Instead of a traditional shoot, her mind is placed into an AI-driven simulation of the film, where she interacts with digital replicas of the original characters in real time. When Brandy fails at a key piano scene, the story diverges from the original plot, and her attempts to repair it accidentally trigger Clara’s AI character to develop autonomy and consciousness.
+
+
 ---
 
 ## 2. Core Components
@@ -245,6 +248,34 @@ Analyze CSV logs in Jupyter/Colab:
 * **KPIs**: frustration, conflict, novelty, loop score, goal progress
 * **Event chains**: visualize causal lines (trigger → impulse → action → result)
 * **Memory recall**: inspect which past events influenced current choices
+
+### Notebook Workflow (adam_log_analysis.ipynb)
+
+- Open `adam_log_analysis.ipynb` and run the first cells. It uses `analysis_utils.py` for parsing and plots.
+- Default CSV path resolves from `LOG_FILE` in `.env` (written by the GUI) or falls back to `adam_behavior_log.csv`.
+
+Minimal usage inside the notebook:
+
+```python
+from analysis_utils import prepare_dataframe, experiment_dashboard, plot_kpi_overlay, kpi_correlation_heatmap
+
+df = prepare_dataframe()  # uses LOG_FILE or default
+experiment_dashboard(df, save=True)  # saves figures/ and shows rolling trends
+
+# Overlays by experiment/agent
+plot_kpi_overlay(df, metric="frustration", by="experiment_tag", rolling=5)
+plot_kpi_overlay(df, metric="mismatch_rate", by="agent_id", rolling=5)
+
+# KPI correlations
+kpi_correlation_heatmap(df)
+```
+
+If you edit `analysis_utils.py`, reload it in-place:
+
+```python
+import importlib, analysis_utils as au
+au = importlib.reload(au)
+```
 
 ---
 
