@@ -74,11 +74,11 @@ Adam’s mind follows the **Observe → Orient → Decide → Act** cycle:
 
 ```mermaid
 flowchart LR
-    O[Observe] --> R[Orient<br/>(Memories + Impulses)]
-    R --> I[Imagine & Reflect<br/>(Simulated + LLM outcomes)]
-    I --> D[Decide<br/>(Final Action + Reasoning)]
+    O[Observe] --> R["Orient\n(Memories + Impulses)"]
+    R --> I["Imagine & Reflect\n(Simulated + LLM outcomes)"]
+    I --> D["Decide\n(Final Action + Reasoning)"]
     D --> A[Act in TextWorld]
-    A --> M[Memory Formation<br/>(CSV + Pinecone)]
+    A --> M["Memory Formation\n(CSV + Pinecone)"]
     M --> O
 ```
 
