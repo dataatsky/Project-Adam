@@ -11,7 +11,8 @@ app = Flask(__name__)
 # --- CONFIGURATION ---
 OLLAMA_MODEL = "qwen3:1.7b"
 
-# --- PROMPTS ---
+# --- PROMPTS ---CognitiveLoop.run_loop()
+
 SUBCONSCIOUS_PROMPT = """
 You are the subconscious of an AI agent named Adam. Your sole purpose is to generate raw, unfiltered emotional and behavioral impulses based on his current situation. You must respond ONLY with a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
 

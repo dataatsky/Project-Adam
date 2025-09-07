@@ -1,0 +1,780 @@
+--- cognitive_loop_gui.py
++++ cognitive_loop_gui.py
++# cognitive_loop_gui.py
++# -----------------------
++# This new version integrates a simple Tkinter GUI to visualize Adam's state.
++# It runs the cognitive loop in a separate thread to keep the GUI responsive.
++
++import requests
++import json
++import time
++import tkinter as tk
++from tkinter import ttk
++from tkinter.scrolledtext import ScrolledText
++import threading
++import csv
++import os
++import sys # Needed to redirect stdout
++from pinecone import Pinecone
++from sentence_transformers import SentenceTransformer
++from text_world import TextWorld
++
++
++# --- CONFIGURATION ---
++PSYCHE_LLM_API_URL = "http://127.0.0.1:5000/"
++PINECONE_API_KEY = "pcsk_6ht5cM_4bN9g7MEjFcpJGDc5syVJZgEzF1odMwWpsGVTfzVhYV2mZ1Eo7Sd38wUV19LqR9" # Replace with your Pinecone API key
++PINECONE_ENVIRONMENT = "us-east-1" # e.g., "us-west1-gcp"
++PINECONE_INDEX_NAME = "project-adam-memory-text"
++LOG_FILE = "adam_behavior_log.csv"
++
++# --- LOG HEADERS ---
++LOG_HEADERS = [
++    "timestamp", "world_time", "location", "mood", "mood_intensity",
++    "sensory_events", "resonant_memories", "impulses", "chosen_action", "action_result"
++]
++
++# --- INITIALIZATION ---
++print("Initializing Cognitive Loop (GUI Version)...")
++model = SentenceTransformer('all-MiniLM-L6-v2')
++print("Model loaded.")
++
++pc = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
++
++if PINECONE_INDEX_NAME not in pc.list_indexes().names():
++    print(f"Creating new Pinecone index: {PINECONE_INDEX_NAME}")
++    pc.create_index(name=PINECONE_INDEX_NAME, dimension=384, metric='cosine')
++index = pc.Index(PINECONE_INDEX_NAME)
++print("Pinecone connection established.")
++
++FOUNDATIONAL_MEMORIES = [
++    "As a child, the sound of a phone ringing often meant bad news, making me feel anxious.",
++    "I remember my mother humming a gentle tune while she worked in the kitchen. It always made me feel calm.",
++    "A sudden knock on the door once led to an unpleasant surprise. I've been wary of unexpected visitors ever since.",
++    "I enjoy the quiet solitude of reading. Books are a safe escape from a noisy world.",
++    "Loud, chaotic noises like static on a TV have always been unsettling to me.",
++    "I find the gentle sound of rain on a windowpane to be very soothing.",
++    "I have a recurring dream about a locked door that I can't open, which fills me with a sense of unease and curiosity."
++]
++
++def pre_populate_foundational_memories():
++    stats = index.describe_index_stats()
++    if stats.get('total_vector_count', 0) == 0:
++        print("--- Index is empty. Pre-populating with foundational memories... ---")
++        vectors_to_upsert = []
++        for i, memory_text in enumerate(FOUNDATIONAL_MEMORIES):
++            vector = model.encode(memory_text).tolist()
++            metadata = {"text": memory_text, "timestamp": time.time(), "type": "foundational"}
++            vectors_to_upsert.append((str(i), vector, metadata))
++        
++        index.upsert(vectors=vectors_to_upsert)
++        print(f"--- {len(vectors_to_upsert)} foundational memories have been added. ---")
++    else:
++        print("--- Index already contains memories. Skipping pre-population. ---")
++
++
++class CognitiveLoop:
++    def __init__(self, log_filename, log_headers, status_callback):
++        self.agent_status = {
++            "emotional_state": {"mood": "neutral", "level": 0.1},
++            "personality": {"curiosity": 0.8, "bravery": 0.6, "caution": 0.7},
++            "needs": {"hunger": 0.1},
++            "goal": "Find the source of the strange noises in the house."
++        }
++        self.status_callback = status_callback
++        try:
++            self.memory_id_counter = index.describe_index_stats().get('total_vector_count', 0)
++        except Exception as e:
++            self.memory_id_counter = 0
++        
++        self.current_mood = "neutral"
++        self.mood_intensity = 0.1
++        self.last_action_reasoning = "Initializing..."
++        self.latest_memory = "No memories yet."
++        self.is_running = True
++        self.last_resonant_memories = []
++        # --- FIXED AttributeError ---
++        # Initialize the recent_memories list here.
++        self.recent_memories = []
++        self.log_filename = log_filename
++        self.log_headers = log_headers
++        self.current_world_state = {}
++        self.raw_impulses = []
++        self.hypothetical_outcomes = []
++        self.chosen_action = {}
++
++    def set_status(self, message):
++        """Callback to update the GUI status bar."""
++        self.status_callback(message)
++
++    def log_cycle_data(self, cycle_data):
++        try:
++            with open(self.log_filename, mode='a', newline='', encoding='utf-8') as f:
++                writer = csv.DictWriter(f, fieldnames=self.log_headers)
++                writer.writerow(cycle_data)
++        except Exception as e:
++            print(f"Error writing to log file: {e}")
++    
++    def observe(self, world_state):
++        self.set_status("Observing...")
++        print("\n--- 1. OBSERVING ---")
++        print(f"Received world state: {json.dumps(world_state, indent=2)}")
++        self.current_world_state = world_state
++        return world_state
++
++    def orient(self, world_state):
++        self.set_status("Orienting (Subconscious)...")
++        print("\n--- 2. ORIENTING (Subconscious) ---")
++        sensory_events = world_state.get('sensory_events', [])
++        if not sensory_events: return None
++
++        query_text = " ".join([f"{e['type']} of {e['object']} which is {e['details']}" for e in sensory_events if 'object' in e])
++        
++        if not query_text:
++            print("No object-based sensory events to form a memory query.")
++            self.last_resonant_memories = []
++        else:
++            query_vector = model.encode(query_text).tolist()
++            print(f"Querying memory with: '{query_text}'")
++            try:
++                results = index.query(vector=query_vector, top_k=3, include_metadata=True)
++                self.last_resonant_memories = [res['metadata']['text'] for res in results['matches']]
++                print(f"Resonant Memories: {self.last_resonant_memories}")
++            except Exception: 
++                self.last_resonant_memories = []
++
++        payload = {
++            "current_state": self.agent_status,
++            "world_state": world_state,
++            "resonant_memories": self.last_resonant_memories
++        }
++        try:
++            response = requests.post(f"{PSYCHE_LLM_API_URL}/generate_impulse", json=payload)
++            response.raise_for_status()
++            impulses = response.json()
++            self.raw_impulses = impulses.get('impulses', [])
++            return impulses
++        except requests.exceptions.RequestException as e:
++            print(f"Error communicating with Psyche-LLM: {e}")
++            return None
++
++    def imagine_and_reflect(self, initial_impulses, world):
++        self.set_status("Imagining & Reflecting...")
++        print("\n--- 2.5. IMAGINING & REFLECTING ---")
++        
++        self.hypothetical_outcomes = []
++        top_impulses = sorted(initial_impulses.get('impulses', []), key=lambda x: x.get('urgency', 0), reverse=True)[:3]
++
++        for impulse in top_impulses:
++            action = {"verb": impulse.get("verb"), "target": impulse.get("target")}
++            
++            try:
++                response = requests.post(f"{PSYCHE_LLM_API_URL}/imagine", json={"action": action})
++                imagined_outcome = response.json().get("outcome", "I imagine nothing happens.")
++            except Exception:
++                imagined_outcome = "My imagination is fuzzy."
++            
++            cloned_world = world.clone()
++            simulated_result = cloned_world.process_action(action)
++            
++            self.hypothetical_outcomes.append({
++                "action": f"{action['verb']}_{action['target']}",
++                "imagined": imagined_outcome,
++                "simulated": simulated_result.get("reason")
++            })
++
++        payload = {
++            "current_state": self.agent_status,
++            "hypothetical_outcomes": self.hypothetical_outcomes,
++            "recent_memories": self.recent_memories
++        }
++        try:
++            response = requests.post(f"{PSYCHE_LLM_API_URL}/reflect", json=payload)
++            reflection_result = response.json()
++            print(f"Reflection Result: {reflection_result.get('reasoning')}")
++            return reflection_result
++        except Exception as e:
++            print(f"Error during reflection: {e}")
++            return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "My mind is blank."}
++
++
++    def decide(self, final_action, reasoning):
++        self.set_status("Deciding...")
++        print("\n--- 3. DECIDING ---")
++        
++        self.chosen_action = final_action
++        self.last_action_reasoning = reasoning
++
++        print(f"Final Chosen Action: {self.chosen_action}")
++        return self.chosen_action, reasoning
++
++    def act(self, world, action, reasoning, world_state, impulses):
++        self.set_status("Acting...")
++        print("\n--- 4. ACTING ---")
++        action_result = world.process_action(action)
++        print(f"Action Result: {action_result}")
++        
++        if action_result.get('state_change'):
++            if 'hunger' in action_result['state_change']:
++                self.agent_status['needs']['hunger'] = max(0, self.agent_status['needs']['hunger'] + action_result['state_change']['hunger'])
++
++        sensed_objects = [e['object'] for e in world_state.get('sensory_events', []) if 'object' in e]
++        sensed_str = f"I sensed {', '.join(sensed_objects)}." if sensed_objects else "I sensed nothing out of the ordinary."
++
++        decision_str = f"I decided to {action['verb']}." if action['target'] == 'null' else f"I decided to {action['verb']} the {action['target']}."
++
++        result_reason = action_result.get('reason', 'it just happened.')
++        if action_result.get('success'):
++            event_description = f"I was in the {world.agent_location}. {sensed_str} My emotional state became {self.current_mood}. {decision_str} The result was: {result_reason}"
++        else:
++            event_description = f"I was in the {world.agent_location}. {sensed_str} My emotional state became {self.current_mood}. {decision_str} But it failed because {result_reason}"
++
++        self.latest_memory = event_description
++        
++        self.recent_memories.append(event_description)
++        if len(self.recent_memories) > 5: self.recent_memories.pop(0)
++
++        print(f"Forming new memory: '{event_description}'")
++        memory_vector = model.encode(event_description).tolist()
++        metadata = {"text": event_description, "timestamp": time.time()}
++        try:
++            index.upsert(vectors=[(str(self.memory_id_counter), memory_vector, metadata)])
++            self.memory_id_counter += 1
++            print("Memory successfully stored.")
++        except Exception as e:
++            print(f"Could not store memory in Pinecone: {e}")
++        
++        cycle_data = {
++            "timestamp": time.time(),
++            "world_time": world.world_time,
++            "location": world.agent_location,
++            "mood": self.current_mood,
++            "mood_intensity": self.mood_intensity,
++            "sensory_events": json.dumps(world_state.get('sensory_events', [])),
++            "resonant_memories": json.dumps(self.last_resonant_memories),
++            "impulses": json.dumps(impulses.get('impulses', []) if impulses else []),
++            "chosen_action": f"{action.get('verb')}_{action.get('target')}",
++            "action_result": json.dumps(action_result)
++        }
++        self.log_cycle_data(cycle_data)
++
++    def run_loop(self):
++        text_world = TextWorld()
++        while self.is_running:
++            self.set_status("Updating world...")
++            text_world.update()
++            self.agent_status['needs']['hunger'] = min(1, self.agent_status['needs']['hunger'] + 0.005)
++
++            world_state = text_world.get_world_state()
++            full_world_state = self.observe(world_state)
++            initial_impulses = self.orient(full_world_state)
++            
++            if initial_impulses:
++                reflection = self.imagine_and_reflect(initial_impulses, text_world)
++                final_action = reflection.get('final_action', {'verb': 'wait', 'target': 'null'})
++                reasoning = reflection.get('reasoning', 'I am unsure.')
++                
++                emotional_shift = initial_impulses.get('emotional_shift', {})
++                if emotional_shift:
++                    self.agent_status['emotional_state']['mood'] = emotional_shift.get('mood', self.current_mood)
++                    new_level = self.agent_status['emotional_state']['level'] + emotional_shift.get('level_delta', 0)
++                    self.agent_status['emotional_state']['level'] = max(0, min(1, new_level))
++                self.current_mood = self.agent_status['emotional_state']['mood']
++                self.mood_intensity = self.agent_status['emotional_state']['level']
++
++                action, reasoning = self.decide(final_action, reasoning)
++                self.act(text_world, action, reasoning, full_world_state, initial_impulses)
++            else:
++                print("\nOrient phase failed or returned no impulses. Skipping cycle.")
++
++            self.set_status("Idle...")
++            print("\n--- Cycle Complete. Waiting for next perception... ---")
++            time.sleep(5)
++
++class PsycheMonitor:
++    def __init__(self, root, cognitive_loop):
++        self.root = root
++        self.cognitive_loop = cognitive_loop
++        self.root.title("Adam's Psyche Monitor")
++        self.root.geometry("1200x800")
++        
++        # --- Main Layout ---
++        main_pane = ttk.PanedWindow(root, orient=tk.HORIZONTAL)
++        main_pane.pack(fill=tk.BOTH, expand=True)
++        
++        left_pane = ttk.PanedWindow(main_pane, orient=tk.VERTICAL)
++        right_frame = ttk.Labelframe(main_pane, text="Live Console Log", padding=10)
++        main_pane.add(left_pane, weight=2)
++        main_pane.add(right_frame, weight=1)
++
++        # --- Left Pane ---
++        vitals_frame = ttk.Labelframe(left_pane, text="Vitals", padding=10)
++        mind_frame = ttk.Labelframe(left_pane, text="Mind State", padding=10)
++        left_pane.add(vitals_frame, weight=1)
++        left_pane.add(mind_frame, weight=4)
++
++        # Vitals
++        self.mood_label = ttk.Label(vitals_frame, text="Current Mood: neutral", font=("Helvetica", 14))
++        self.mood_label.grid(row=0, column=0, padx=10, sticky="w")
++        self.intensity_bar = ttk.Progressbar(vitals_frame, orient="horizontal", length=200, mode="determinate")
++        self.intensity_bar.grid(row=0, column=1, padx=10, sticky="ew")
++        self.hunger_label = ttk.Label(vitals_frame, text="Hunger: 10%", font=("Helvetica", 14))
++        self.hunger_label.grid(row=1, column=0, padx=10, sticky="w")
++        self.hunger_bar = ttk.Progressbar(vitals_frame, orient="horizontal", length=200, mode="determinate")
++        self.hunger_bar.grid(row=1, column=1, padx=10, sticky="ew")
++        vitals_frame.columnconfigure(1, weight=1)
++
++        # Mind State
++        mind_notebook = ttk.Notebook(mind_frame)
++        mind_notebook.pack(fill=tk.BOTH, expand=True, pady=5)
++        
++        tab1 = ttk.Frame(mind_notebook)
++        tab2 = ttk.Frame(mind_notebook)
++        tab3 = ttk.Frame(mind_notebook)
++        mind_notebook.add(tab1, text="Subconscious")
++        mind_notebook.add(tab2, text="Imagination")
++        mind_notebook.add(tab3, text="Conscious Decision")
++
++        # Tab 1: Subconscious
++        ttk.Label(tab1, text="Raw Impulses (Verb | Target | Drive | Urgency):").pack(anchor='w')
++        self.impulses_list = tk.Listbox(tab1)
++        self.impulses_list.pack(fill=tk.BOTH, expand=True)
++
++        # Tab 2: Imagination
++        ttk.Label(tab2, text="Hypothetical Plans & Outcomes:").pack(anchor='w')
++        self.imagination_text = ScrolledText(tab2, wrap=tk.WORD, state=tk.DISABLED)
++        self.imagination_text.pack(fill=tk.BOTH, expand=True)
++
++        # Tab 3: Conscious Decision
++        self.reasoning_label = ttk.Label(tab3, text="Reasoning: Initializing...", wraplength=750, justify=tk.LEFT, font=("Helvetica", 12, "italic"))
++        self.reasoning_label.pack(pady=10, anchor='w')
++        self.memory_text = ScrolledText(tab3, height=8, wrap=tk.WORD, state=tk.DISABLED)
++        self.memory_text.pack(fill=tk.BOTH, expand=True)
++
++        # --- Right Pane: Live Log ---
++        self.log_text = ScrolledText(right_frame, wrap=tk.WORD, state=tk.DISABLED)
++        self.log_text.pack(fill=tk.BOTH, expand=True)
++
++        # --- Status Bar ---
++        self.status_bar = ttk.Label(root, text="Initializing...", anchor='w', relief=tk.SUNKEN)
++        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
++        
++        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
++        self.update_gui()
++
++    def update_gui(self):
++        # Vitals
++        self.mood_label.config(text=f"Current Mood: {self.cognitive_loop.current_mood.capitalize()}")
++        self.intensity_bar['value'] = self.cognitive_loop.mood_intensity * 100
++        hunger_val = self.cognitive_loop.agent_status['needs']['hunger']
++        self.hunger_label.config(text=f"Hunger: {hunger_val:.0%}")
++        self.hunger_bar['value'] = hunger_val * 100
++        
++        # Subconscious Tab
++        self.impulses_list.delete(0, tk.END)
++        for impulse in self.cognitive_loop.raw_impulses:
++            display_str = f"{impulse.get('verb', 'N/A')} | {impulse.get('target', 'N/A')} | {impulse.get('drive', 'N/A')} | {impulse.get('urgency', 0):.2f}"
++            self.impulses_list.insert(tk.END, display_str)
++
++        # Imagination Tab
++        self.imagination_text.config(state=tk.NORMAL)
++        self.imagination_text.delete('1.0', tk.END)
++        for outcome in self.cognitive_loop.hypothetical_outcomes:
++            self.imagination_text.insert(tk.END, f"Action: {outcome['action']}\n")
++            self.imagination_text.insert(tk.END, f"  - Imagined: {outcome['imagined']}\n")
++            self.imagination_text.insert(tk.END, f"  - Simulated: {outcome['simulated']}\n\n")
++        self.imagination_text.config(state=tk.DISABLED)
++
++        # Conscious Decision Tab
++        self.reasoning_label.config(text=f"Reasoning: {self.cognitive_loop.last_action_reasoning}")
++        self.memory_text.config(state=tk.NORMAL)
++        self.memory_text.delete('1.0', tk.END)
++        self.memory_text.insert(tk.END, f"Latest Memory Formed:\n\n{self.cognitive_loop.latest_memory}")
++        self.memory_text.config(state=tk.DISABLED)
++        
++        self.root.after(500, self.update_gui)
++
++    def on_closing(self):
++        print("--- GUI closing, shutting down cognitive loop. ---")
++        self.cognitive_loop.is_running = False
++        self.root.destroy()
++
++# A class to redirect stdout to the GUI
++class TextRedirector(object):
++    def __init__(self, widget):
++        self.widget = widget
++
++    def write(self, str):
++        self.widget.config(state=tk.NORMAL)
++        self.widget.insert(tk.END, str)
++        self.widget.see(tk.END)
++        self.widget.config(state=tk.DISABLED)
++    
++    def flush(self):
++        pass
++
++if __name__ == "__main__":
++    if not os.path.exists(LOG_FILE):
++        with open(LOG_FILE, mode='w', newline='', encoding='utf-8') as f:
++            writer = csv.DictWriter(f, fieldnames=LOG_HEADERS)
++            writer.writeheader()
++        print(f"Created log file: {LOG_FILE}")
++    
++    pre_populate_foundational_memories()
++    
++    root = tk.Tk()
++    
++    # Create the cognitive loop and pass it the status bar update function
++    def update_status(message):
++        root.after(0, lambda: app.status_bar.config(text=message))
++
++    adam_brain = CognitiveLoop(LOG_FILE, LOG_HEADERS, update_status)
++    app = PsycheMonitor(root, adam_brain)
++    
++    # Redirect stdout to the log widget in the GUI
++    sys.stdout = TextRedirector(app.log_text)
++    
++    loop_thread = threading.Thread(target=adam_brain.run_loop, daemon=True)
++    loop_thread.start()
++    
++    root.mainloop()
+
+--- text_world.py
++++ text_world.py
++import random
++import time
++import copy
++
++# text_world.py - Simple deterministic text world with affordances and time
++import copy
++
++class TextWorld:
++    def __init__(self):
++        self.rooms = {
++            "living_room": {"exits": {"north": "kitchen"}},
++            "kitchen": {"exits": {"south": "living_room"}},
++        }
++        self.current_room = "living_room"
++        self.objects = {
++            "door": {"location": "living_room", "openable": True, "state": "closed"},
++            "fridge": {"location": "kitchen", "openable": True, "contains": ["apple"], "state": "closed"},
++            "phone": {"location": "living_room", "answerable": True, "state": "idle"},
++            "tv": {"location": "living_room", "toggleable": True, "state": "off"},
++            "radio": {"location": "living_room", "toggleable": True, "state": "off"},
++            "bed": {"location": "living_room", "sleepable": True},
++        }
++        self.hunger = 5
++        self.mood_intensity = 5
++        self.world_time = 8  # start at 8:00 (morning)
++
++    def copy(self):
++        return copy.deepcopy(self)
++
++    def update(self, ticks=1):
++        self.world_time += ticks
++
++    def time_of_day(self):
++        cycle = self.world_time % 24
++        if 6 <= cycle < 12:
++            return "morning"
++        elif 12 <= cycle < 18:
++            return "afternoon"
++        elif 18 <= cycle < 22:
++            return "evening"
++        else:
++            return "night"
++
++    def get_world_state(self):
++        current_room_objects = {
++            name: obj for name, obj in self.objects.items()
++            if obj.get("location") == self.current_room
++        }
++        return {
++            "location": self.current_room,
++            "objects": current_room_objects,
++            "time": self.world_time,
++            "time_of_day": self.time_of_day(),
++            "hunger": self.hunger,
++            "mood_intensity": self.mood_intensity,
++        }
++
++    def process_action(self, action):
++        verb = action.get("verb")
++        target = action.get("target")
++        # normalize minimal None
++        if verb is None:
++            return {"success": False, "desc": "No action verb provided."}
++
++        if verb == "wait":
++            self.update(1)
++            return {"success": True, "desc": "You wait a bit."}
++
++        if verb == "go":
++            # target expected to be direction like 'north' or room name
++            exits = self.rooms.get(self.current_room, {}).get("exits", {})
++            if target in exits:
++                self.current_room = exits[target]
++                return {"success": True, "desc": f"You go {target} into the {self.current_room}."}
++            # allow going by room name
++            if target in self.rooms:
++                self.current_room = target
++                return {"success": True, "desc": f"You move to the {target}."}
++            return {"success": False, "desc": "You can't go that way."}
++
++        if verb in ("examine", "investigate"):
++            if target in self.objects and self.objects[target]["location"] == self.current_room:
++                obj = self.objects[target]
++                desc = obj.get("description", f"A {target}. State: {obj.get('state','unknown')}")
++                clue = obj.get("clue")
++                if clue:
++                    desc += " " + clue
++                return {"success": True, "desc": desc}
++            return {"success": False, "desc": "Nothing interesting."}
++
++        if verb == "read":
++            return {"success": True, "desc": f"You read the {target}. It's ordinary."}
++
++        if verb == "eat":
++            if target == "fridge":
++                fridge = self.objects.get("fridge")
++                if fridge and fridge.get("state") == "open" and fridge.get("contains"):
++                    food = fridge["contains"].pop()
++                    self.hunger = max(0, self.hunger - 3)
++                    return {"success": True, "desc": f"You eat a {food}. Hunger reduced."}
++                return {"success": False, "desc": "The fridge is closed or empty."}
++            return {"success": False, "desc": f"You try to eat {target}, but nothing happens."}
++
++        if verb == "open":
++            obj = self.objects.get(target)
++            if obj and obj.get("openable"):
++                obj["state"] = "open"
++                return {"success": True, "desc": f"You open the {target}."}
++            return {"success": False, "desc": "You can't open that."}
++
++        if verb == "close":
++            obj = self.objects.get(target)
++            if obj and obj.get("openable"):
++                obj["state"] = "closed"
++                return {"success": True, "desc": f"You close the {target}."}
++            return {"success": False, "desc": "You can't close that."}
++
++        if verb == "answer":
++            obj = self.objects.get(target)
++            if obj and obj.get("answerable") and obj.get("state") in ("ringing","knocking","idle"):
++                obj["state"] = "idle"
++                self.mood_intensity = max(0, self.mood_intensity - 1)
++                return {"success": True, "desc": f"You answer the {target}."}
++            return {"success": False, "desc": "You can't answer that."}
++
++        if verb == "toggle":
++            obj = self.objects.get(target)
++            if obj and obj.get("toggleable"):
++                cur = obj.get("state","off")
++                new = "on" if cur=="off" else "off"
++                obj["state"] = new
++                # toggling tv can affect mood
++                if target == "tv" and new == "on":
++                    self.mood_intensity = min(10, self.mood_intensity + 1)
++                return {"success": True, "desc": f"You toggle the {target} {new}."}
++            return {"success": False, "desc": "You can't toggle that."}
++
++        if verb == "sleep":
++            if target == "bed":
++                self.update(8)  # pass hours
++                self.hunger = min(10, self.hunger + 1)
++                self.mood_intensity = max(0, self.mood_intensity - 2)
++                return {"success": True, "desc": "You sleep and feel rested."}
++            return {"success": False, "desc": "You can't sleep there."}
++
++        return {"success": False, "desc": "Nothing happens."}
+--- psyche_ollama.py
++++ psyche_ollama.py
++# psyche_llm_ollama.py
++# ---------------------
++# Updated with a new /imagine endpoint for the Imagination Engine.
++
++from flask import Flask, request, jsonify
++import ollama
++import json
++
++app = Flask(__name__)
++
++# --- CONFIGURATION ---
++OLLAMA_MODEL = "qwen3:1.7b"
++
++# --- PROMPTS ---
++SUBCONSCIOUS_PROMPT = """
++You are the subconscious of an AI agent named Adam. Your sole purpose is to generate raw, unfiltered emotional and behavioral impulses based on his current situation. You must respond ONLY with a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
++
++The JSON object must contain two keys: "emotional_shift" and "impulses".
++- "emotional_shift" must be an object with a "mood" (string), a "level_delta" (float between -1.0 and 1.0), and a "reason" (string).
++- "impulses" must be a list of objects, where each object has a "verb" (string), a "target" (string), a "drive" (string), and an "urgency" (float between 0.0 and 1.0).
++
++Combine a verb from the VERB TOOLBOX with a noun from the PERCEIVABLE OBJECTS list to form an action. Be creative.
++
++VERB TOOLBOX:
++- "wait", "go", "examine", "open", "close", "read", "eat", "answer", "ignore", "turn_on", "turn_off", "investigate", "sleep"
++"""
++
++IMAGINATION_PROMPT = """
++You are the imagination of an AI agent named Adam. Your task is to predict the most likely outcome of a hypothetical action. Respond with a single, valid JSON object containing one key: "outcome". The value should be a brief, first-person narrative sentence describing what you imagine will happen.
++"""
++
++CONSCIOUS_MIND_PROMPT = """
++You are the conscious, rational mind of an AI agent named Adam. Your purpose is to reflect on a series of hypothetical plans and make a final, logical decision. You must respond ONLY with a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
++
++The JSON object must contain two keys: "final_action" (an object with "verb" and "target" keys) and "reasoning" (string).
++- "final_action" must be ONE of the actions from the hypothetical plans.
++- "reasoning" must be a brief, first-person explanation for your choice, considering your long-term goal and current emotional state.
++
++Analyze the situation provided. For each potential action, you have an "imagined" outcome (what you thought would happen) and a "simulated" outcome (what the world's physics say would actually happen).
++
++**Crucially, if you see that a hypothetical action has repeatedly failed in your recent memories, you must acknowledge this pattern. Your reasoning should reflect this frustration, and you should choose a *different* action to try and break the loop.** Choose the action with the best outcome that aligns with your goals.
++"""
++
++def safe_json_loads(raw):
++    """Tolerant JSON loader: extract first {...} if raw contains noise."""
++    if raw is None:
++        return {}
++    try:
++        return safe_json_loads(raw)
++    except Exception:
++        try:
++            start = raw.index("{")
++            end = raw.rindex("}") + 1
++            return safe_json_loads(raw[start:end])
++        except Exception:
++            return {}
++
++def generate_user_prompt(data):
++    """Builds the user prompt string for the subconscious."""
++    world_state = data.get('world_state', {})
++    current_state = data.get('current_state', {})
++    resonant_memories = data.get('resonant_memories', [])
++    
++    prompt = "## Current Situation:\n"
++    prompt += f"- Adam's current goal is: {current_state.get('goal', 'None')}\n"
++    prompt += f"- Adam's current hunger level is {current_state.get('needs', {}).get('hunger', 0):.2f} (0=satiated, 1=starving).\n"
++    prompt += f"- Adam is in the: {world_state.get('agent_location')}\n"
++    prompt += f"- PERCEIVABLE OBJECTS (Nouns): {world_state.get('perceivable_objects')}\n"
++    prompt += f"- AVAILABLE EXITS (for 'go' verb): {world_state.get('available_exits')}\n"
++    prompt += f"- Current sensory events are: {world_state.get('sensory_events')}\n"
++    
++    if resonant_memories:
++        prompt += "\n## Resonant Memories (These past events feel relevant):\n"
++        for i, mem in enumerate(resonant_memories):
++            prompt += f"- {mem}\n"
++    
++    prompt += "\nBased on this situation and memories, generate the JSON response for Adam's subconscious."
++    return prompt
++
++def generate_reflection_prompt(data):
++    """Builds the user prompt string for the conscious mind."""
++    current_state = data.get('current_state', {})
++    hypothetical_outcomes = data.get('hypothetical_outcomes', [])
++    recent_memories = data.get('recent_memories', [])
++    
++    prompt = "## Reflection Task:\n"
++    prompt += f"- My current emotional state is: {current_state.get('emotional_state', {}).get('mood')}\n"
++    prompt += f"- My long-term goal is: {current_state.get('goal')}\n"
++    
++    if recent_memories:
++        prompt += "\n## My Recent Memories (Last 5 actions):\n"
++        for i, mem in enumerate(recent_memories):
++            prompt += f"- {mem}\n"
++
++    prompt += "\n## Hypothetical Plans:\n"
++    for outcome in hypothetical_outcomes:
++        prompt += f"- Action: {outcome['action']}\n"
++        prompt += f"  - I imagined: '{outcome['imagined']}'\n"
++        prompt += f"  - The simulation said: '{outcome['simulated']}'\n"
++
++    prompt += "\nNow, reflect on this and provide the JSON for my final decision."
++    return prompt
++
++@app.route('/generate_impulse', methods=['POST'])
++def generate_impulse():
++    try:
++        data = request.json
++        user_prompt = generate_user_prompt(data)
++        
++        print("--- Sending prompt to Ollama (Subconscious) ---")
++        
++        response = ollama.chat(
++            model=OLLAMA_MODEL,
++            messages=[
++                {"role": "system", "content": SUBCONSCIOUS_PROMPT},
++                {"role": "user", "content": user_prompt}
++            ],
++            options={"temperature": 0.8},
++            format="json"
++        )
++        
++        llm_json_output = safe_json_loads(response['message']['content'])
++        
++        print("--- Received JSON from Ollama (Subconscious) ---")
++        return jsonify(llm_json_output)
++
++    except Exception as e:
++        print(f"An error occurred in /generate_impulse: {e}")
++        return jsonify({"error": str(e)}), 500
++
++@app.route('/imagine', methods=['POST'])
++def imagine():
++    try:
++        data = request.json
++        action = data.get('action', {})
++        user_prompt = f"Hypothetical action: I will {action.get('verb')} the {action.get('target')}. What is the most likely outcome?"
++        
++        print("--- Sending prompt to Ollama (Imagination) ---")
++        
++        response = ollama.chat(
++            model=OLLAMA_MODEL,
++            messages=[
++                {"role": "system", "content": IMAGINATION_PROMPT},
++                {"role": "user", "content": user_prompt}
++            ],
++            options={"temperature": 0.7},
++            format="json"
++        )
++        
++        llm_json_output = safe_json_loads(response['message']['content'])
++        
++        print("--- Received JSON from Ollama (Imagination) ---")
++        return jsonify(llm_json_output)
++
++    except Exception as e:
++        print(f"An error occurred in /imagine: {e}")
++        return jsonify({"error": str(e)}), 500
++
++@app.route('/reflect', methods=['POST'])
++def reflect():
++    try:
++        data = request.json
++        user_prompt = generate_reflection_prompt(data)
++        
++        print("--- Sending prompt to Ollama (Conscious Mind) ---")
++        
++        response = ollama.chat(
++            model=OLLAMA_MODEL,
++            messages=[
++                {"role": "system", "content": CONSCIOUS_MIND_PROMPT},
++                {"role": "user", "content": user_prompt}
++            ],
++            options={"temperature": 0.5},
++            format="json"
++        )
++        
++        llm_json_output = safe_json_loads(response['message']['content'])
++        
++        print("--- Received JSON from Ollama (Conscious Mind) ---")
++        return jsonify(llm_json_output)
++
++    except Exception as e:
++        print(f"An error occurred in /reflect: {e}")
++        return jsonify({"error": str(e)}), 500
++
++
++if __name__ == '__main__':
++    print("--- Psyche-LLM (Ollama Edition with Imagination Engine) is running ---")
++    print(f"--- Using model: {OLLAMA_MODEL} ---")
++    app.run(port=5000)

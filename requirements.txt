@@ -8,3 +8,7 @@ seaborn
 ollama
 streamlit
 pinecone
+flask
+requests
+dotenv
+ipykernel

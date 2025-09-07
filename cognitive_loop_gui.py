@@ -41,9 +41,9 @@ PINECONE_INDEX_NAME = "project-adam-memory-text"
 LOG_FILE = "adam_behavior_log.csv"
 
 LOG_HEADERS = [
-    "timestamp", "world_time", "location", "mood", "mood_intensity",
+    "timestamp", "cycle_num", "experiment_tag", "agent_id", "world_time", "location", "mood", "mood_intensity",
     "sensory_events", "resonant_memories", "impulses", "chosen_action", "action_result",
-    "kpis", "snapshot"
+    "imagined_outcomes", "simulated_outcomes", "emotional_delta", "kpis", "snapshot"
 ]
 
 # --------------------
@@ -77,7 +77,10 @@ def pre_populate_foundational_memories():
         vectors = []
         for i, text in enumerate(FOUNDATIONAL_MEMORIES):
             vec = model.encode(text).tolist()
-            meta = {"text": text, "timestamp": time.time(), "type": "foundational"}
+            meta = {"text": text, "timestamp": time.time(),
+            "cycle_num": self.cycle_counter,
+            "experiment_tag": self.experiment_tag,
+            "agent_id": self.agent_id, "type": "foundational"}
             vectors.append((str(i), vec, meta))
         index.upsert(vectors=vectors)
         print(f"— Added {len(vectors)} foundational memories.")
@@ -449,7 +452,7 @@ def run_flask_app():
 # Cognitive Loop
 # --------------------
 class CognitiveLoop:
-    def __init__(self, log_filename, log_headers, ui: PsycheMonitor|None=None):
+    def __init__(self, log_filename, log_headers, ui: PsycheMonitor|None=None, experiment_tag="baseline", agent_id="adam1"):
         self.agent_status = {
             "emotional_state": {"mood":"neutral","level":0.1},
             "personality": {"curiosity":0.8,"bravery":0.6,"caution":0.7},
@@ -470,6 +473,22 @@ class CognitiveLoop:
         self.mood_intensity = 0.1
         self.ui = ui
         self.insight = InsightEngine(history_len=24)
+        self.experiment_tag = experiment_tag
+        self.agent_id = agent_id
+        self.cycle_counter = 0
+        self.last_hypothetical = []
+        self.experiment_tag = experiment_tag
+        self.agent_id = agent_id
+        self.cycle_counter = 0
+        self.last_hypothetical = []
+
+    def log_cycle_data(self, cycle_data):
+        try:
+            with open(self.log_filename, mode="a", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=self.log_headers)
+                writer.writerow(cycle_data)
+        except Exception as e:
+            print(f"CSV write error: {e}")
 
     # helpers to touch UI
     def _ui_status(self, txt):
@@ -559,6 +578,7 @@ class CognitiveLoop:
                 "imagined": imagined,
                 "simulated": sim.get("reason")
             })
+        self.last_hypothetical = hypothetical
         self.ui and self.ui.set_imagination(hypothetical)
         payload = {
             "current_state": self.agent_status,
@@ -622,6 +642,9 @@ class CognitiveLoop:
         # Log CSV with extended fields
         cycle_data = {
             "timestamp": time.time(),
+            "cycle_num": self.cycle_counter,
+            "experiment_tag": self.experiment_tag,
+            "agent_id": self.agent_id,
             "world_time": world.world_time,
             "location": world.agent_location,
             "mood": self.current_mood,
@@ -631,6 +654,9 @@ class CognitiveLoop:
             "impulses": json.dumps(imps),
             "chosen_action": f"{action.get('verb')}_{action.get('target')}",
             "action_result": json.dumps(result),
+            "imagined_outcomes": json.dumps([h.get("imagined","") for h in self.last_hypothetical]),
+            "simulated_outcomes": json.dumps([h.get("simulated","") for h in self.last_hypothetical]),
+            "emotional_delta": json.dumps(emotional_delta),
             "kpis": json.dumps(kpis),
             "snapshot": json.dumps({
                 "triggers": triggers,
@@ -647,6 +673,7 @@ class CognitiveLoop:
     def run_loop(self):
         world = TextWorld()
         while self.is_running:
+            self.cycle_counter += 1
             world.update()
             self.agent_status['needs']['hunger'] = min(1, self.agent_status['needs']['hunger'] + 0.005)
             ws = world.get_world_state()
@@ -677,11 +704,24 @@ class CognitiveLoop:
 # Stdout bridge → GUI
 # --------------------
 class TextRedirector:
-    def __init__(self, write_cb):
-        self._write_cb = write_cb
-    def write(self, s):
-        self._write_cb(s)
-    def flush(self):
+    def __init__(self, widget):
+        self.widget = widget
+
+    def _append(self, s: str):
+        self.widget.config(state="normal")
+        self.widget.insert("end", s)
+        self.widget.see("end")
+        self.widget.config(state="disabled")
+
+    def write(self, s: str):
+        try:
+            # Always update widgets on the Tk main thread
+            self.widget.after(0, self._append, s)
+        except Exception:
+            # Widget may be already destroyed during shutdown
+            pass
+
+    def flush(self):  # needed by some streams
         pass
 
 # --------------------
