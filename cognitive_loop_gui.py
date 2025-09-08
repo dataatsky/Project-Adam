@@ -1,14 +1,3 @@
-# cognitive_loop_gui.py — Full Rewrite (Insights + Threads)
-# ---------------------------------------------------------
-# This version focuses on human understanding of "why" Adam acts:
-#  - Per-cycle structured snapshots + KPIs
-#  - Insights tab: Cards (What changed / Why / Result), Causal line, Badges
-#  - Storyline Threads: progress per target (door/phone/tv/radio/computer)
-#  - Vitals with progress bars
-#  - Live console log
-#  - Thread-safe UI updates from background loop
-#
-# Drop-in replacement. Requires: sentence-transformers, pinecone-client, flask, requests, tkinter
 
 import json
 import time
@@ -255,6 +244,25 @@ class PsycheMonitor:
         self.root.title("Adam's Psyche Monitor — Insights")
         self.root.geometry("1320x860")
 
+        # CognitiveLoop reference (set later)
+        self.brain = None
+
+        # Controls toolbar
+        controls = ttk.Labelframe(root, text="Controls", padding=6)
+        controls.pack(fill="x", padx=6, pady=(6, 0))
+        self.btn_pause = ttk.Button(controls, text="Pause", command=lambda: self._on_pause())
+        self.btn_pause.pack(side="left")
+        self.btn_resume = ttk.Button(controls, text="Resume", command=lambda: self._on_resume())
+        self.btn_resume.pack(side="left", padx=(6, 0))
+        self.btn_step = ttk.Button(controls, text="Step", command=lambda: self._on_step())
+        self.btn_step.pack(side="left", padx=(6, 0))
+        ttk.Label(controls, text="Cycle sec:").pack(side="left", padx=(12, 4))
+        self.speed = tk.DoubleVar(value=5.0)
+        self.speed_scale = ttk.Scale(controls, from_=0.2, to=10.0, orient="horizontal", variable=self.speed, command=self._on_speed)
+        self.speed_scale.pack(side="left", fill="x", expand=True)
+        self.cycle_var = tk.StringVar(value="Cycle: 0")
+        ttk.Label(controls, textvariable=self.cycle_var).pack(side="right")
+
         main = ttk.PanedWindow(root, orient="horizontal")
         main.pack(fill="both", expand=True)
 
@@ -284,6 +292,21 @@ class PsycheMonitor:
 
         vitals.pack(fill="x")
         left.add(vitals, weight=1)
+
+        # KPI bars
+        kpi = ttk.Labelframe(left, text="KPIs", padding=10)
+        self.kpi_bars = {}
+        for key in ("frustration", "conflict", "novelty", "goal_progress", "loop_score"):
+            row = ttk.Frame(kpi)
+            ttk.Label(row, text=f"{key}:").pack(side="left", padx=(0, 6))
+            bar = ttk.Progressbar(row, orient="horizontal", mode="determinate", maximum=1.0, length=260)
+            bar.pack(side="left", fill="x", expand=True)
+            val = ttk.Label(row, text="0.00")
+            val.pack(side="left", padx=8)
+            row.pack(fill="x", pady=2)
+            self.kpi_bars[key] = (bar, val)
+        kpi.pack(fill="x")
+        left.add(kpi, weight=1)
 
         # Mind notebook
         mind = ttk.Labelframe(left, text="Mind", padding=10)
@@ -368,6 +391,16 @@ class PsycheMonitor:
     def update_vitals(self, mood, mood_level, hunger):
         self.ui_bus.post(self._vitals, mood, mood_level, hunger)
 
+    def _kpis(self, kpis):
+        for key, (bar, label) in self.kpi_bars.items():
+            v = float(kpis.get(key, 0) or 0)
+            v = max(0.0, min(1.0, v))
+            bar["value"] = v
+            label.config(text=f"{v:.2f}")
+
+    def update_kpis(self, kpis):
+        self.ui_bus.post(self._kpis, kpis)
+
     def _subconscious(self, emotional_shift, impulses, resonant):
         self.sub_text.config(state="normal")
         self.sub_text.delete("1.0", "end")
@@ -437,6 +470,36 @@ class PsycheMonitor:
         self.ui_bus.post(self._causal, causal_line)
         self.ui_bus.post(self._threads, threads)
 
+    # Brain wiring and control callbacks
+    def set_brain(self, brain):
+        self.brain = brain
+        try:
+            self.speed.set(getattr(brain, "cycle_sleep", 5.0))
+        except Exception:
+            pass
+
+    def set_cycle(self, n: int):
+        self.cycle_var.set(f"Cycle: {n}")
+
+    def _on_pause(self):
+        if self.brain:
+            self.brain.pause()
+
+    def _on_resume(self):
+        if self.brain:
+            self.brain.resume()
+
+    def _on_step(self):
+        if self.brain:
+            self.brain.step_once()
+
+    def _on_speed(self, _):
+        if self.brain:
+            try:
+                self.brain.set_cycle_sleep(float(self.speed.get()))
+            except Exception:
+                pass
+
 # --------------------
 # Flask tiny API (optional external viewers)
 # --------------------
@@ -471,6 +534,8 @@ class CognitiveLoop:
         except Exception:
             self.memory_id_counter = 0
         self.is_running = True
+        self.paused = False
+        self._step_flag = False
         self.last_resonant_memories = []
         self.recent_memories = []
         self.log_filename = log_filename
@@ -484,10 +549,11 @@ class CognitiveLoop:
         self.agent_id = agent_id
         self.cycle_counter = 0
         self.last_hypothetical = []
-        self.experiment_tag = experiment_tag
-        self.agent_id = agent_id
-        self.cycle_counter = 0
-        self.last_hypothetical = []
+        # loop pacing
+        try:
+            self.cycle_sleep = float(os.getenv("CYCLE_SLEEP", "5"))
+        except Exception:
+            self.cycle_sleep = 5.0
 
     def log_cycle_data(self, cycle_data):
         try:
@@ -512,13 +578,21 @@ class CognitiveLoop:
     def _ui_log(self, text):
         if self.ui: self.ui.append_log(text)
 
-    def log_cycle_data(self, cycle_data):
+    # Controls
+    def pause(self):
+        self.paused = True
+
+    def resume(self):
+        self.paused = False
+
+    def step_once(self):
+        self._step_flag = True
+
+    def set_cycle_sleep(self, sec: float):
         try:
-            with open(self.log_filename, mode="a", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=self.log_headers)
-                writer.writerow(cycle_data)
-        except Exception as e:
-            print(f"CSV write error: {e}")
+            self.cycle_sleep = max(0.1, float(sec))
+        except Exception:
+            pass
 
     # OODA steps
     def observe(self, world_state):
@@ -676,10 +750,19 @@ class CognitiveLoop:
         }
         self.log_cycle_data(cycle_data)
         self._ui_vitals()
+        if self.ui:
+            try:
+                self.ui.update_kpis(kpis)
+                self.ui.set_cycle(self.cycle_counter)
+            except Exception:
+                pass
 
     def run_loop(self):
         world = TextWorld()
         while self.is_running:
+            if self.paused and not self._step_flag:
+                time.sleep(0.1)
+                continue
             self.cycle_counter += 1
             world.update()
             self.agent_status['needs']['hunger'] = min(1, self.agent_status['needs']['hunger'] + 0.005)
@@ -717,7 +800,10 @@ class CognitiveLoop:
                 self.act(world, action, "No impulses", full, {})
             print("\n— Cycle complete. Waiting … —")
             self._ui_status("Cycle complete. Waiting…")
-            time.sleep(5)
+            if self._step_flag:
+                self._step_flag = False
+                self.paused = True
+            time.sleep(self.cycle_sleep)
 
 # --------------------
 # Stdout bridge → GUI
@@ -769,6 +855,7 @@ if __name__ == "__main__":
 
     # Start cognitive loop
     adam_brain = CognitiveLoop(LOG_FILE, LOG_HEADERS, ui=app_gui)
+    app_gui.set_brain(adam_brain)
     loop_thread = threading.Thread(target=adam_brain.run_loop, daemon=True)
     loop_thread.start()
 
