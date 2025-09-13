@@ -210,7 +210,23 @@ Running `cognitive_loop_gui.py` opens the **Psyche Monitor**:
 
 ---
 
-## 10. Typical Workflow
+# 10. Metrics and KPIs
+
+Project Adam tracks several metrics to quantify Adam’s behavior:
+
+| **Metric**        | **Formula / Source**                                                     | **Meaning**                                                                 |
+|--------------------|--------------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| Frustration        | Failed actions ÷ total actions (last 10 cycles)                         | High = Adam is failing repeatedly, building stress                           |
+| Conflict           | Suppressed strong impulses ÷ total high-urgency impulses                 | High = Adam ignores his strongest urges (internal conflict)                  |
+| Novelty            | Unique triggers ÷ total triggers (last 10 cycles)                       | High = Adam experiences diverse stimuli, Low = repetition                     |
+| Loop Score         | Longest streak of repeated failed (verb, target) actions, normalized     | High = Adam is stuck in a failure loop                                       |
+| Goal Progress      | Heuristic: helpful verbs ~0.5–0.7, detours ~0.2, default ~0.3            | Higher = action aligns with long-term goal                                   |
+| Emotional Delta    | JSON: {mood, level_delta, reason} from subconscious                      | Captures how impulses shift mood/stress each cycle                           |
+| Snapshot           | JSON summary: triggers, impulses, chosen action, outcome, deltas, KPIs   | Provides structured per-cycle context                                        |
+| Badges             | Derived flags (loop, frustration, avoidance)                            | Highlights key patterns: repeating loops, high stress, suppressed impulses    |
+
+
+## 11. Typical Workflow
 
 1. Start **Psyche** service.
 2. Start **GUI + Loop**.
@@ -223,7 +239,7 @@ Running `cognitive_loop_gui.py` opens the **Psyche Monitor**:
 
 ---
 
-## 11. Emergent Behaviors
+## 12. Emergent Behaviors
 
 * **Cognitive overload**
   Multiple impulses may overwhelm Adam, leading him to `wait`.
@@ -241,7 +257,7 @@ Running `cognitive_loop_gui.py` opens the **Psyche Monitor**:
 
 ---
 
-## 12. Analyzing Behavior
+## 13. Analyzing Behavior
 
 Analyze CSV logs in Jupyter/Colab:
 
@@ -279,7 +295,7 @@ au = importlib.reload(au)
 
 ---
 
-## 13. Extending the Project
+## 14. Extending the Project
 
 Ideas for expansion:
 
