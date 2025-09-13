@@ -10,13 +10,29 @@ This README provides everything you need to **understand, install, run, and anal
 1. **Start the Psyche Service** (subconscious + imagination + reflection):
 
    ```bash
-   python psyche_llm_ollama.py
+   python psyche_ollama.py
    ```
 
-2. **Start Adam’s Mind + GUI**:
+2. **Start Adam’s Mind**:
+
+   Preferred entrypoint:
+
+   ```bash
+   python main.py
+   ```
+
+   Legacy script (still supported):
 
    ```bash
    python cognitive_loop_gui.py
+   ```
+
+   Headless mode (no GUI, loop + API only):
+
+   ```bash
+   python main.py --headless
+   # optional: choose API port
+   python main.py --headless --api-port 9090
    ```
 
 3. **Watch the GUI**:
@@ -50,7 +66,7 @@ This project was born as an effort to represent the episode Hotel Reverie from B
 | Component                | File                    | Role                                                                             |
 | ------------------------ | ----------------------- | -------------------------------------------------------------------------------- |
 | **Text World**           | `text_world.py`         | Adam’s environment: a text-based apartment with rooms, objects, and events.      |
-| **Psyche-LLM**           | `psyche_llm_ollama.py`  | Adam’s subconscious: generates impulses, imagination, and reflection via Ollama. |
+| **Psyche-LLM**           | `psyche_ollama.py`      | Adam’s subconscious: generates impulses, imagination, and reflection via Ollama. |
 | **Memory**               | Pinecone DB             | Stores Adam’s memories as embeddings for long-term recall.                       |
 | **Cognitive Loop + GUI** | `cognitive_loop_gui.py` | Adam’s conscious mind: runs the OODA cycle, integrates memory, manages the GUI.  |
 
@@ -63,7 +79,7 @@ Adam’s cognition flows between world, psyche, memory, and actions:
 ```mermaid
 flowchart TD
     A[Text World<br/>`text_world.py`] -->|World State| B[Cognitive Loop<br/>`cognitive_loop_gui.py`]
-    B -->|Prompts| C[Psyche-LLM<br/>`psyche_llm_ollama.py`]
+    B -->|Prompts| C[Psyche-LLM<br/>`psyche_ollama.py`]
     C -->|Impulses / Reflection| B
     B -->|Embeddings| D[Pinecone DB<br/>Memory]
     D -->|Resonant Memories| B
@@ -145,11 +161,33 @@ ollama pull qwen3:1.7b
 
 ```bash
 # Terminal 1: Start Psyche (LLM backend)
-python psyche_llm_ollama.py
+python psyche_ollama.py
 
-# Terminal 2: Start Adam’s Mind + GUI
-python cognitive_loop_gui.py
+# Terminal 2: Start Adam’s Mind + GUI (preferred)
+python main.py
+
+# Or headless
+python main.py --headless
+
+# Or legacy script
+# python cognitive_loop_gui.py
 ```
+
+---
+
+## 6.1 Module Layout (refactor)
+
+Recent refactor split major responsibilities into modules for clarity/testability:
+
+- main.py: entrypoint wiring UI, loop, memory, psyche client, and API
+- loop/cognitive_loop.py: OODA cognitive loop
+- loop/insight_engine.py: KPI and insights
+- services/memory_store.py: embeddings + Pinecone wrapper
+- services/psyche_client.py: HTTP client to psyche service
+- ui/psyche_monitor.py, ui/ui_bus.py, ui/text_redirector.py: Tkinter UI and helpers
+- api.py: Flask state API factory
+- config.py: env-backed configuration
+- constants.py: shared constants (e.g., CSV LOG_HEADERS)
 
 ---
 
