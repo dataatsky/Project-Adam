@@ -249,6 +249,74 @@ export AGENT_STATUS_JSON='{
 
 ---
 
+## 6.3 Psyche Service (LLM)
+
+The Flask service in `psyche_ollama.py` powers impulses, imagination, and reflection.
+
+- Contracts (Pydantic)
+  - Validates all requests and responses:
+    - `POST /generate_impulse` → `{ emotional_shift, impulses[] }`
+    - `POST /imagine` → `{ outcome }`
+    - `POST /reflect` → `{ final_action, reasoning }`
+  - Returns `400` with details on invalid payloads.
+
+- Observability
+  - Prometheus metrics on `GET /metrics` (text):
+    - `psyche_requests_total{endpoint,status}`
+    - `psyche_request_seconds{endpoint}` (histogram)
+    - `psyche_ollama_calls_total{endpoint,status}`
+  - Structured logs via Python `logging` (logger name `psyche`).
+
+- Robustness
+  - Retries with exponential backoff for Ollama calls:
+    - `OLLAMA_RETRIES` (default `2`)
+    - `OLLAMA_BACKOFF` seconds (default `0.5`)
+
+- Run
+  - `python psyche_ollama.py` (serves on `http://127.0.0.1:5000/`)
+  - Metrics: `http://127.0.0.1:5000/metrics`
+
+- Test
+  - `pytest -q` (uses Flask test client and a mocked Ollama backend)
+
+- Curl examples
+  - Generate impulses
+    ```bash
+    curl -s http://127.0.0.1:5000/generate_impulse \
+      -H 'Content-Type: application/json' \
+      -d '{
+            "current_state": {"needs": {"hunger": 0.2}, "goal": "Find the source"},
+            "world_state": {"agent_location": "living_room", "sensory_events": []},
+            "resonant_memories": []
+          }' | jq .
+    ```
+  - Imagine an action
+    ```bash
+    curl -s http://127.0.0.1:5000/imagine \
+      -H 'Content-Type: application/json' \
+      -d '{"action": {"verb": "examine", "target": "door"}}' | jq .
+    ```
+  - Reflect and choose final action
+    ```bash
+    curl -s http://127.0.0.1:5000/reflect \
+      -H 'Content-Type: application/json' \
+      -d '{
+            "current_state": {"emotional_state": {"mood": "neutral"}},
+            "hypothetical_outcomes": [
+              {"action": {"verb": "examine", "target": "door"},
+               "imagined": "I see if it is locked.",
+               "simulated": "I looked at the door. State: closed"}
+            ],
+            "recent_memories": []
+          }' | jq .
+    ```
+  - Metrics
+    ```bash
+    curl -s http://127.0.0.1:5000/metrics | head
+    ```
+
+---
+
 ## 7. World Simulation
 
 Adam lives in a **virtual apartment** simulated by `TextWorld`:
