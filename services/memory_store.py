@@ -3,6 +3,7 @@ from typing import List, Tuple, Optional
 
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
+import logging
 
 
 FOUNDATIONAL_MEMORIES = [
@@ -22,38 +23,50 @@ class MemoryStore:
     On failures, methods degrade gracefully to no-ops.
     """
 
-    def __init__(self, *, api_key: Optional[str], environment: Optional[str], index_name: Optional[str], model_name: Optional[str], dimension: int = 384):
+    def __init__(self, *, api_key: Optional[str], environment: Optional[str], index_name: Optional[str], model_name: Optional[str], dimension: int = 384, batch_size: int = 5):
+        self.log = logging.getLogger(__name__ + ".MemoryStore")
         self.model = None
         self.pc = None
         self.index = None
         self.dimension = dimension
-        # Model
-        try:
-            if model_name:
-                self.model = SentenceTransformer(model_name)
-        except Exception as e:
-            print(f"⚠️ SentenceTransformer init failed: {e}")
-            self.model = None
-        # Pinecone
-        try:
-            if api_key and environment and index_name:
-                self.pc = Pinecone(api_key=api_key, environment=environment)
+        self._batch_size = int(batch_size)
+        self._buffer: List[str] = []
+        # Defer heavy init until first use
+        self._api_key = api_key
+        self._env = environment
+        self._index_name = index_name
+        self._model_name = model_name
+
+    def _ensure_ready(self):
+        # Initialize model lazily
+        if self.model is None:
+            try:
+                if self._model_name:
+                    self.model = SentenceTransformer(self._model_name)
+                    self.log.info("SentenceTransformer model loaded")
+            except Exception as e:
+                self.log.warning(f"SentenceTransformer init failed: {e}")
+                self.model = None
+        # Initialize Pinecone lazily
+        if self.index is None and self._api_key and self._env and self._index_name:
+            try:
+                self.pc = Pinecone(api_key=self._api_key, environment=self._env)
                 try:
-                    # New SDK returns an IndexList object with .names()
                     indexes = self.pc.list_indexes().names()
                 except Exception:
                     indexes = self.pc.list_indexes()
-                if index_name not in indexes:
-                    print(f"Creating Pinecone index: {index_name}")
-                    self.pc.create_index(name=index_name, dimension=self.dimension, metric="cosine")
-                self.index = self.pc.Index(index_name)
-                print("Pinecone connection established.")
-        except Exception as e:
-            print(f"⚠️ Pinecone init failed: {e}")
-            self.index = None
+                if self._index_name not in indexes:
+                    self.log.info(f"Creating Pinecone index: {self._index_name}")
+                    self.pc.create_index(name=self._index_name, dimension=self.dimension, metric="cosine")
+                self.index = self.pc.Index(self._index_name)
+                self.log.info("Pinecone connection established")
+            except Exception as e:
+                self.log.warning(f"Pinecone init failed: {e}")
+                self.index = None
 
     def get_total_count(self) -> int:
         try:
+            self._ensure_ready()
             if not self.index:
                 return 0
             stats = self.index.describe_index_stats()
@@ -62,25 +75,27 @@ class MemoryStore:
             return 0
 
     def ensure_foundational_memories(self, memories: Optional[List[str]] = None):
+        self._ensure_ready()
         if not self.index or not self.model:
             return
         try:
             stats = self.index.describe_index_stats()
             if stats.get("total_vector_count", 0) == 0:
-                print("— Pre-populating Pinecone with foundational memories …")
+                self.log.info("Pre-populating Pinecone with foundational memories …")
                 vectors: List[Tuple[str, List[float], dict]] = []
                 for i, text in enumerate(memories or FOUNDATIONAL_MEMORIES):
                     vec = self.model.encode(text).tolist()
                     meta = {"text": text, "timestamp": time.time(), "type": "foundational"}
                     vectors.append((str(i), vec, meta))
                 self.index.upsert(vectors=vectors)
-                print(f"— Added {len(vectors)} foundational memories.")
+                self.log.info(f"Added {len(vectors)} foundational memories")
             else:
-                print("— Found existing memories, skipping pre-population.")
+                self.log.info("Found existing memories, skipping pre-population")
         except Exception as e:
-            print(f"⚠️ Foundational pre-population failed: {e}")
+            self.log.warning(f"Foundational pre-population failed: {e}")
 
     def query_similar_texts(self, text: str, top_k: int = 3) -> List[str]:
+        self._ensure_ready()
         if not text or not self.model or not self.index:
             return []
         try:
@@ -88,21 +103,46 @@ class MemoryStore:
             res = self.index.query(vector=vec, top_k=top_k, include_metadata=True)
             return [m["metadata"]["text"] for m in res.get("matches", []) if m.get("metadata")]
         except Exception as e:
-            print(f"⚠️ Memory query failed: {e}")
+            self.log.warning(f"Memory query failed: {e}")
             return []
 
     def upsert_texts(self, texts: List[str]):
+        self._ensure_ready()
         if not self.model or not self.index:
+            return
+        try:
+            # Bufferize inputs for batch upserts
+            for t in texts:
+                if isinstance(t, str) and t.strip():
+                    self._buffer.append(t)
+            if len(self._buffer) >= self._batch_size:
+                # flush
+                base = self.get_total_count()
+                to_write = self._buffer[: self._batch_size]
+                self._buffer = self._buffer[self._batch_size:]
+                vectors = []
+                for i, text in enumerate(to_write):
+                    vec = self.model.encode(text).tolist()
+                    meta = {"text": text, "timestamp": time.time(), "type": "narrative"}
+                    vectors.append((str(base + i), vec, meta))
+                if vectors:
+                    self.index.upsert(vectors=vectors)
+        except Exception as e:
+            self.log.warning(f"Upsert texts failed: {e}")
+
+    def flush(self):
+        self._ensure_ready()
+        if not self.model or not self.index or not self._buffer:
             return
         try:
             base = self.get_total_count()
             vectors = []
-            for i, text in enumerate(texts):
+            for i, text in enumerate(self._buffer):
                 vec = self.model.encode(text).tolist()
                 meta = {"text": text, "timestamp": time.time(), "type": "narrative"}
                 vectors.append((str(base + i), vec, meta))
             if vectors:
                 self.index.upsert(vectors=vectors)
+            self._buffer = []
         except Exception as e:
-            print(f"⚠️ Upsert texts failed: {e}")
-
+            self.log.warning(f"Flush failed: {e}")

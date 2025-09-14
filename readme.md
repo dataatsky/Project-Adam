@@ -33,6 +33,8 @@ This README provides everything you need to **understand, install, run, and anal
    python main.py --headless
    # optional: choose API port
    python main.py --headless --api-port 9090
+   # optional: run a fixed number of cycles then exit
+   python main.py --headless --cycles 10
    ```
 
 3. **Watch the GUI**:
@@ -128,6 +130,21 @@ Dependencies:
 * `pinecone-client`
 * `tkinter` (bundled with Python on most platforms)
 
+### Configure Environment
+
+Copy the example env file and tweak values:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` to set pacing, logging, agent initialization, and optional vector memory.
+
+The Flask state API exposes:
+
+- `GET /get_state`: location + mood snapshot
+- `GET /metrics`: cycle, mood, hunger, and current KPIs
+
 ### Configure Pinecone
 
 1. Sign up at [pinecone.io](https://www.pinecone.io).
@@ -191,6 +208,47 @@ Recent refactor split major responsibilities into modules for clarity/testabilit
 
 ---
 
+## 6.2 Configuration (env)
+
+You can customize the loop and the agent via environment variables (in your shell or a `.env` file):
+
+- Loop and logging
+  - `CYCLE_SLEEP`: seconds between cycles (default: `5`)
+  - `IMAGINE_TOP_K`: number of impulses to imagine per cycle (default: `3`)
+  - `LOG_FILE`: path to CSV log (default: `adam_loop.log`)
+  - `PSYCHE_LLM_API_URL`: psyche HTTP base URL (default: `http://127.0.0.1:5000/`)
+  - `LOG_LEVEL`: Python logging level (default: `INFO`)
+  - `PSYCHE_TIMEOUT`, `PSYCHE_RETRIES`, `PSYCHE_BACKOFF`: control HTTP client behavior to the psyche service
+  - `MEMORY_UPSERT_BATCH`: buffer size for vector upserts to Pinecone (default: `5`)
+
+- Agent initialization
+  - Simple keys:
+    - `AGENT_MOOD` (default: `neutral`)
+    - `AGENT_LEVEL` (default: `0.1`)
+    - `AGENT_CURIOSITY` (default: `0.8`)
+    - `AGENT_BRAVERY` (default: `0.6`)
+    - `AGENT_CAUTION` (default: `0.7`)
+    - `AGENT_HUNGER` (default: `0.1`)
+    - `AGENT_GOAL` (default: `Find the source of the strange noises in the house.`)
+  - Full JSON override (replaces all above):
+
+```bash
+export AGENT_STATUS_JSON='{
+  "emotional_state": {"mood": "anxious", "level": 0.4},
+  "personality": {"curiosity": 0.7, "bravery": 0.4, "caution": 0.8},
+  "needs": {"hunger": 0.15},
+  "goal": "Calm the environment and rest."
+}'
+```
+
+- Vector memory (optional; degrades gracefully if unset):
+  - `SENTENCE_MODEL` (e.g., `all-MiniLM-L6-v2`)
+  - `PINECONE` (API key)
+  - `PINECONE_ENVIRONMENT`
+  - `PINECONE_INDEX_NAME`
+
+---
+
 ## 7. World Simulation
 
 Adam lives in a **virtual apartment** simulated by `TextWorld`:
@@ -229,6 +287,25 @@ Running `cognitive_loop_gui.py` opens the **Psyche Monitor**:
 * **Storyline Threads**
 
   * Tracks progress per object (e.g. door storyline, phone storyline)
+
+### GUI Controls
+
+- Pause: stops the loop after the current cycle; UI remains interactive.
+- Resume: restarts continuous cycling at the current “Cycle sec” pacing.
+- Step: runs exactly one full cycle (Observe → Orient → Imagine/Reflect → Decide → Act). If running, it marks “pause after this cycle”.
+- Clear Filter: clears the active storyline filter and restores full context in the panes.
+- Save Snapshot: writes a JSON snapshot of the current cycle (agent status, KPIs, last hypothetical outcomes) to `snapshot_<timestamp>.json` in the CWD.
+- Copy Metrics: copies the current KPIs JSON to the clipboard.
+- Cycle sec: adjusts the delay between cycles (also affects stepping); lower is faster.
+- Log: runtime logging level for the live console (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+- Font: scales the font size used in the JSON/log panes.
+- Dark: toggles a dark color scheme for the text panes.
+- Autoscroll: keeps the console pinned to the latest log entries when enabled.
+- Simple mode: hides the raw JSON tabs to keep Insights front‑and‑center.
+
+Tips
+- Selecting a thread applies a target filter across Subconscious, Imagination, Decision, and the Insights cards. Use “Clear Filter” to reset.
+- In Insights, hover the timeline boxes for a quick tooltip; click to set the causal label. When filtered, a small “Target trend” sparkline appears under the badges.
 
 ---
 

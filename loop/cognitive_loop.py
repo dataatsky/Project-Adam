@@ -1,20 +1,26 @@
 import json
 import time
 import os
-from typing import Optional
+from typing import Optional, Callable
+import copy
+import logging
+
+import config
 
 from text_world import TextWorld
 from loop.insight_engine import InsightEngine
 
 
 class CognitiveLoop:
-    def __init__(self, log_filename, log_headers, ui=None, experiment_tag="baseline", agent_id="adam1", memory=None, psyche=None):
-        self.agent_status = {
+    def __init__(self, log_filename, log_headers, ui=None, experiment_tag="baseline", agent_id="adam1", memory=None, psyche=None, world_factory: Optional[Callable[[], TextWorld]] = None):
+        self.log = logging.getLogger(__name__ + ".CognitiveLoop")
+        # Initialize from config.AGENT_STATUS (deep-copied to avoid shared mutations)
+        self.agent_status = copy.deepcopy(getattr(config, "AGENT_STATUS", {
             "emotional_state": {"mood": "neutral", "level": 0.1},
             "personality": {"curiosity": 0.8, "bravery": 0.6, "caution": 0.7},
             "needs": {"hunger": 0.1},
             "goal": "Find the source of the strange noises in the house.",
-        }
+        }))
         self.memory = memory
         try:
             self.memory_id_counter = (self.memory.get_total_count() if self.memory else 0)
@@ -29,16 +35,18 @@ class CognitiveLoop:
         self.log_filename = log_filename
         self.log_headers = log_headers
         self.current_world_state = {}
-        self.current_mood = "neutral"
-        self.mood_intensity = 0.1
+        self.current_mood = self.agent_status.get("emotional_state", {}).get("mood", "neutral")
+        self.mood_intensity = float(self.agent_status.get("emotional_state", {}).get("level", 0.1))
         self.ui = ui
         self.insight = InsightEngine(history_len=24)
         self.experiment_tag = experiment_tag
         self.agent_id = agent_id
         self.cycle_counter = 0
         self.last_hypothetical = []
+        self.world_factory = world_factory or TextWorld
+        self.imagine_top_k = int(getattr(config, "IMAGINE_TOP_K", 3))
         try:
-            self.cycle_sleep = float(os.getenv("CYCLE_SLEEP", "5"))
+            self.cycle_sleep = float(getattr(config, "CYCLE_SLEEP", 5.0))
         except Exception:
             self.cycle_sleep = 5.0
 
@@ -87,15 +95,15 @@ class CognitiveLoop:
     # OODA steps
     def observe(self, world_state):
         self._ui_status("Observing…")
-        print("\n— 1. OBSERVING —")
-        print(json.dumps(world_state, indent=2))
+        self.log.info("— 1. OBSERVING —")
+        self.log.debug(json.dumps(world_state, indent=2))
         self.current_world_state = world_state
         self._ui_vitals()
         return world_state
 
     def orient(self, world_state):
         self._ui_status("Orienting (Subconscious)…")
-        print("\n— 2. ORIENTING —")
+        self.log.info("— 2. ORIENTING —")
         sensory = world_state.get("sensory_events", [])
         query_text = " ".join([f"{e.get('type','')} of {e.get('object','')} which is {e.get('details','')}" for e in sensory if 'object' in e])
         if not query_text:
@@ -106,7 +114,7 @@ class CognitiveLoop:
             try:
                 if self.memory:
                     self.last_resonant_memories = self.memory.query_similar_texts(query_text, top_k=3)
-                    print(f"Resonant memories: {self.last_resonant_memories}")
+                    self.log.debug(f"Resonant memories: {self.last_resonant_memories}")
             except Exception:
                 self.last_resonant_memories = []
         payload = {
@@ -127,9 +135,9 @@ class CognitiveLoop:
 
     def imagine_and_reflect(self, initial_impulses, world: TextWorld):
         self._ui_status("Imagining & Reflecting…")
-        print("\n— 2.5. IMAGINE & REFLECT —")
+        self.log.info("— 2.5. IMAGINE & REFLECT —")
         hypothetical = []
-        top = sorted(initial_impulses.get("impulses", []), key=lambda x: x.get("urgency", 0), reverse=True)[:3]
+        top = sorted(initial_impulses.get("impulses", []), key=lambda x: x.get("urgency", 0), reverse=True)[: self.imagine_top_k]
         for imp in top:
             if not isinstance(imp, dict):
                 continue
@@ -151,21 +159,21 @@ class CognitiveLoop:
         reflection = {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank."}
         if self.psyche:
             reflection = self.psyche.reflect(payload)
-            print(f"Reflection: {reflection.get('reasoning')}")
+            self.log.debug(f"Reflection: {reflection.get('reasoning')}")
         return reflection
 
     def decide(self, final_action, reasoning):
         self._ui_status("Deciding…")
-        print("\n— 3. DECIDING —")
-        print(f"Chosen: {final_action}")
+        self.log.info("— 3. DECIDING —")
+        self.log.debug(f"Chosen: {final_action}")
         self.ui and self.ui.set_decision(final_action, reasoning)
         return final_action, reasoning
 
     def act(self, world, action, reasoning, world_state, impulses):
         self._ui_status("Acting…")
-        print("\n— 4. ACTING —")
+        self.log.info("— 4. ACTING —")
         result = world.process_action(action)
-        print(f"Result: {result}")
+        self.log.debug(f"Result: {result}")
         if result.get("state_change") and "hunger" in result["state_change"]:
             self.agent_status['needs']['hunger'] = max(0, self.agent_status['needs']['hunger'] + result['state_change']['hunger'])
         # Narrative memory
@@ -186,7 +194,7 @@ class CognitiveLoop:
                 self.memory.upsert_texts([event_desc])
                 self.memory_id_counter += 1
         except Exception as e:
-            print(f"Memory upsert error: {e}")
+            self.log.warning(f"Memory upsert error: {e}")
         # --- Insights & snapshot ---
         triggers = [f"{e.get('object')} : {e.get('details')}" for e in world_state.get('sensory_events', []) if 'object' in e]
         imps = impulses.get('impulses', []) if impulses else []
@@ -237,7 +245,7 @@ class CognitiveLoop:
                 pass
 
     def run_loop(self):
-        world = TextWorld()
+        world = self.world_factory()
         while self.is_running:
             if self.paused and not self._step_flag:
                 time.sleep(0.1)
@@ -274,13 +282,18 @@ class CognitiveLoop:
                 action, _ = self.decide(final_action, reasoning)
                 self.act(world, action, reasoning, full, impulses)
             else:
-                print("\nOrient failed or empty; waiting.")
+                self.log.info("Orient failed or empty; waiting.")
                 action = {"verb": "wait", "target": "null"}
                 self.act(world, action, "No impulses", full, {})
-            print("\n— Cycle complete. Waiting … —")
+            self.log.info("— Cycle complete. Waiting … —")
             self._ui_status("Cycle complete. Waiting…")
             if self._step_flag:
                 self._step_flag = False
                 self.paused = True
+            # try flushing any pending memory writes periodically
+            try:
+                if self.memory and hasattr(self.memory, "flush"):
+                    self.memory.flush()
+            except Exception:
+                pass
             time.sleep(self.cycle_sleep)
-

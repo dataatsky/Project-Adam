@@ -14,7 +14,7 @@ from tkinter.scrolledtext import ScrolledText
 from loop.cognitive_loop import CognitiveLoop
 from ui.ui_bus import UiBus
 from ui.psyche_monitor import PsycheMonitor
-from ui.text_redirector import TextRedirector
+from ui.log_handler import TkTextHandler
 from services.memory_store import MemoryStore
 import config
 from api import create_app
@@ -89,8 +89,13 @@ if __name__ == "__main__":
         root.after(100, pump)
     root.after(100, pump)
 
-    # Redirect stdout to GUI log
-    sys.stdout = TextRedirector(app_gui.log_text)
+    # Configure logging to GUI log
+    import logging
+    logging.basicConfig(level=getattr(config, 'LOG_LEVEL', 'INFO'), format='%(asctime)s %(levelname)s %(name)s: %(message)s')
+    tk_handler = TkTextHandler(app_gui.log_text)
+    tk_handler.setLevel(getattr(config, 'LOG_LEVEL', 'INFO'))
+    tk_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+    logging.getLogger().addHandler(tk_handler)
 
     # Start cognitive loop
     adam_brain = CognitiveLoop(LOG_FILE, LOG_HEADERS, ui=app_gui, memory=memory_store, psyche=psyche)
