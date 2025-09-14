@@ -126,6 +126,173 @@ def compute_mismatch_rate(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def compute_mismatch_rate_fuzzy(df: pd.DataFrame, threshold: int = 80) -> pd.DataFrame:
+    """Fuzzy variant using rapidfuzz if available; falls back to normalized exact.
+
+    threshold: token_set_ratio similarity threshold considered a match (0-100).
+    """
+    try:
+        from rapidfuzz import fuzz
+        def _norm(s):
+            return " ".join(str(s).lower().strip().split())
+        def _sim(a, b):
+            return fuzz.token_set_ratio(_norm(a), _norm(b))
+        def _mismatch(row):
+            try:
+                imagined = row.get("imagined_outcomes_parsed", [])
+                simulated = row.get("simulated_outcomes_parsed", [])
+                if not isinstance(imagined, list) or not isinstance(simulated, list):
+                    return None
+                n = max(1, min(len(imagined), len(simulated)))
+                sims = [_sim(i, s) for i, s in zip(imagined[:n], simulated[:n])]
+                matches = sum(1 for v in sims if v >= threshold)
+                return 1 - (matches / n)
+            except Exception:
+                return None
+        df["mismatch_rate"] = df.apply(_mismatch, axis=1)
+        return df
+    except Exception:
+        # Fallback: normalized exact
+        return compute_mismatch_rate(df)
+
+
+def compute_impulse_alignment(df: pd.DataFrame) -> pd.DataFrame:
+    """Add an urgency-weighted impulse alignment score per row.
+
+    Uses impulses_parsed and snapshot_parsed['chosen'] when available.
+    """
+    if "snapshot_parsed" not in df.columns:
+        return df
+    aligns = []
+    for _, row in df.iterrows():
+        chosen = {}
+        try:
+            snap = row.get("snapshot_parsed", {}) or {}
+            chosen = snap.get("chosen", {}) or {}
+        except Exception:
+            pass
+        verb_c = (chosen or {}).get("verb")
+        targ_c = (chosen or {}).get("target")
+        imps = row.get("impulses_parsed", []) or []
+        total = 0.0
+        score = 0.0
+        try:
+            for imp in imps:
+                urg = float((imp or {}).get("urgency", 0))
+                total += urg
+                v = (imp or {}).get("verb")
+                t = (imp or {}).get("target")
+                if v == verb_c and t == targ_c:
+                    s = 1.0
+                elif v == verb_c or t == targ_c:
+                    s = 0.5
+                else:
+                    s = 0.0
+                score += s * urg
+            aligns.append(None if total == 0 else score / total)
+        except Exception:
+            aligns.append(None)
+    df["impulse_alignment"] = aligns
+    return df
+
+
+def compute_stuck_on_target(df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+    """Approximate 'stuck on target' using chosen/target and action_result success.
+
+    Returns a normalized streak length for the last row relative to the previous window.
+    """
+    try:
+        chosen = df.get("snapshot_parsed", pd.Series([{}] * len(df))).apply(lambda s: (s or {}).get("chosen", {}))
+        chosen_target = chosen.apply(lambda c: (c or {}).get("target"))
+    except Exception:
+        chosen_target = pd.Series([None] * len(df))
+    try:
+        success = df.get("action_result_parsed", pd.Series([{}] * len(df))).apply(lambda r: bool((r or {}).get("success")))
+    except Exception:
+        success = pd.Series([None] * len(df))
+    streaks = []
+    for i in range(len(df)):
+        tgt = chosen_target.iloc[i]
+        streak = 0
+        j = i
+        while j >= 0 and i - j < window:
+            if chosen_target.iloc[j] == tgt and success.iloc[j] is False:
+                streak += 1
+                j -= 1
+            else:
+                break
+        streaks.append(streak / max(1, window / 2))
+    df["stuck_on_target"] = [min(1.0, max(0.0, float(s))) for s in streaks]
+    return df
+
+
+def per_target_success(df: pd.DataFrame) -> pd.DataFrame:
+    """Aggregate attempts and success rates per chosen_target."""
+    try:
+        chosen = df.get("snapshot_parsed", pd.Series([{}] * len(df))).apply(lambda s: (s or {}).get("chosen", {}))
+        tgt = chosen.apply(lambda c: (c or {}).get("target"))
+        succ = df.get("action_result_parsed", pd.Series([{}] * len(df))).apply(lambda r: bool((r or {}).get("success")))
+        out = pd.DataFrame({"target": tgt, "success": succ})
+        g = out.groupby("target", dropna=True)
+        stats = g.agg(attempts=("success", "count"), success_rate=("success", "mean")).reset_index()
+        return stats.sort_values(["success_rate", "attempts"], ascending=[False, False])
+    except Exception:
+        return pd.DataFrame(columns=["target", "attempts", "success_rate"])
+
+
+def ensure_new_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure alignment, stuck_on_target, novelty_object columns exist.
+
+    - If 'alignment' missing, derive from compute_impulse_alignment (column 'impulse_alignment').
+    - If 'stuck_on_target' missing, compute from snapshot/action_result.
+    - If 'novelty_object' missing, fall back to 'novelty' if present.
+    Returns the same DataFrame for chaining.
+    """
+    if "alignment" not in df.columns:
+        if "impulse_alignment" not in df.columns:
+            try:
+                df = compute_impulse_alignment(df)
+            except Exception:
+                pass
+        if "impulse_alignment" in df.columns:
+            df["alignment"] = df["impulse_alignment"]
+    if "stuck_on_target" not in df.columns:
+        try:
+            df = compute_stuck_on_target(df, window=10)
+        except Exception:
+            pass
+    if "novelty_object" not in df.columns and "novelty" in df.columns:
+        df["novelty_object"] = df["novelty"]
+    return df
+
+
+def _read_log_csv(csv_path: str, headers: list[str]) -> pd.DataFrame:
+    """Read the behavior CSV while being tolerant of the presence/absence of a header row.
+
+    - First try reading with header row (header=0). If columns match the expected headers,
+      return as-is.
+    - Otherwise, read with no header and assign our schema.
+    - If the (now data) first row contains the literal header names (from older files), drop it.
+    """
+    try:
+        df0 = pd.read_csv(csv_path)
+        # Heuristic: if at least the first few expected columns are present, accept
+        if set(df0.columns) >= set(headers[:6]):
+            return df0
+    except Exception:
+        pass
+
+    # Fallback: no header in file
+    df = pd.read_csv(csv_path, names=headers, header=None)
+    # Drop a possible header row accidentally read as data
+    try:
+        if str(df.iloc[0, 0]).lower() in {"timestamp", "ts"}:
+            df = df.iloc[1:].reset_index(drop=True)
+    except Exception:
+        pass
+    return df
+
+
 def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
     """Load Adam's behavior CSV, parse/flatten, and compute derived metrics.
 
@@ -145,7 +312,7 @@ def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
         "sensory_events", "resonant_memories", "impulses", "chosen_action", "action_result",
         "imagined_outcomes", "simulated_outcomes", "emotional_delta", "kpis", "snapshot",
     ]
-    df = pd.read_csv(csv_path, names=headers, header=None)
+    df = _read_log_csv(csv_path, headers)
     df = clean_dataframe(df)
     df = _flatten_kpis(df)
     df = _expand_snapshot(df)

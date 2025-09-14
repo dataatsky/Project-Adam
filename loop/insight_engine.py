@@ -1,4 +1,5 @@
 from collections import deque, defaultdict
+import math
 
 
 class InsightEngine:
@@ -75,13 +76,18 @@ class InsightEngine:
 
     def compute_kpis(self):
         last_action = self.actions[-1] if self.actions else {}
-        return {
+        kpis = {
             "frustration": self._frustration(10),
             "conflict": self._conflict(),
             "novelty": self._novelty(10),
             "goal_progress": round(self._goal_progress(last_action), 2),
             "loop_score": self._loop_score(10),
         }
+        # Extended KPIs (non-breaking: consumers can ignore extra keys)
+        kpis["alignment"] = self._impulse_alignment()
+        kpis["stuck_on_target"] = self._stuck_on_target(10)
+        kpis["novelty_object"] = self._novelty_object_decayed(window=12, decay=0.8)
+        return kpis
 
     def badges(self, kpis):
         out = []
@@ -91,6 +97,8 @@ class InsightEngine:
             out.append({"type": "Frustration", "text": "Many recent failures"})
         if kpis.get("conflict", 0) >= 0.6:
             out.append({"type": "Avoidance", "text": "Strong impulses suppressed"})
+        if kpis.get("stuck_on_target", 0) >= 0.6:
+            out.append({"type": "Stuck", "text": "Failing on same target"})
         return out
 
     def threads(self):
@@ -138,3 +146,83 @@ class InsightEngine:
             {"title": "Result", "body": result},
         ]
 
+    # ---------- Extended metrics helpers ----------
+    def _impulse_alignment(self):
+        """Urgency-weighted alignment between last impulses and chosen action.
+        1.0 exact verb+target match; 0.5 verb-only or target-only; 0 otherwise.
+        """
+        if not self.actions or not self.impulses:
+            return 0.0
+        chosen = self.actions[-1] or {}
+        verb_c, targ_c = chosen.get("verb"), chosen.get("target")
+        imps = self.impulses[-1] or []
+        if not imps:
+            return 0.0
+        total = 0.0
+        score = 0.0
+        for imp in imps:
+            urg = float(imp.get("urgency", 0))
+            total += urg
+            v = imp.get("verb")
+            t = imp.get("target")
+            if v == verb_c and t == targ_c:
+                s = 1.0
+            elif v == verb_c or t == targ_c:
+                s = 0.5
+            else:
+                s = 0.0
+            score += s * urg
+        if total <= 0:
+            return 0.0
+        return round(max(0.0, min(1.0, score / total)), 2)
+
+    def _stuck_on_target(self, n=10):
+        """Consecutive failures on the same target regardless of verb, normalized."""
+        if not self.actions:
+            return 0.0
+        actions = list(self.actions)[-n:]
+        if not actions:
+            return 0.0
+        last_target = actions[-1].get("target")
+        streak = 0
+        for a in reversed(actions):
+            if a.get("target") == last_target and not a.get("success"):
+                streak += 1
+            else:
+                break
+        return round(min(1.0, streak / max(1, n / 2)), 2)
+
+    def _novelty_object_decayed(self, window=12, decay=0.8):
+        """Object-level novelty with exponential decay.
+        Counts first-seen objects in the window with recency weights.
+        """
+        if not self.triggers:
+            return 0.0
+        seq = list(self.triggers)[-window:]
+        seen = set()
+        uniq_w = 0.0
+        total_w = 0.0
+        for age, trig_list in enumerate(reversed(seq)):
+            w = decay ** age
+            for t in (trig_list or []):
+                obj = str(t).split(":")[0].strip().lower()
+                total_w += w
+                if obj and obj not in seen:
+                    uniq_w += w
+                    seen.add(obj)
+        if total_w <= 0.0:
+            return 0.0
+        return round(max(0.0, min(1.0, uniq_w / total_w)), 2)
+
+    # Override frustration to ignore no-op waits
+    def _frustration(self, n=10):
+        recent = list(self.actions)[-n:]
+        if not recent:
+            return 0.0
+        def _is_wait(a):
+            return (a.get("verb") == "wait") and (a.get("target") in (None, "", "null"))
+        valid = [a for a in recent if not _is_wait(a)]
+        if not valid:
+            return 0.0
+        fails = sum(1 for a in valid if not a.get("success"))
+        return round(fails / len(valid), 2)
