@@ -201,8 +201,18 @@ class CognitiveLoop:
         emotional_delta = (impulses or {}).get('emotional_shift', {})
         self.insight.add_cycle(action=action, success=bool(result.get('success')), impulses=imps, triggers=triggers, mood=self.agent_status['emotional_state']['mood'])
         kpis = self.insight.compute_kpis()
-        causal = self.insight.causal_line(triggers=triggers, impulses=imps, action=action, imagined="; ", simulated=result.get('reason', ''), emotional_delta=emotional_delta)
-        cards = self.insight.cards(triggers=triggers, kpis=kpis, chosen=action, imagined="; ", simulated=result.get('reason', ''), emotional_delta=emotional_delta)
+        imagined_texts = []
+        for hypo in self.last_hypothetical or []:
+            try:
+                act = hypo.get('action', {}) or {}
+                verb = act.get('verb') or 'wait'
+                target = act.get('target') or 'null'
+                imagined_texts.append(f"{verb} {target}: {hypo.get('imagined', '')}")
+            except Exception:
+                continue
+        imagined_join = "; ".join(filter(None, imagined_texts))
+        causal = self.insight.causal_line(triggers=triggers, impulses=imps, action=action, imagined=imagined_join, simulated=result.get('reason', ''), emotional_delta=emotional_delta)
+        cards = self.insight.cards(triggers=triggers, kpis=kpis, chosen=action, imagined=imagined_join, simulated=result.get('reason', ''), emotional_delta=emotional_delta)
         badges = self.insight.badges(kpis)
         threads = self.insight.threads()
         # Push to UI

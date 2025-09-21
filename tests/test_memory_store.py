@@ -1,0 +1,80 @@
+from collections import defaultdict
+
+import services.memory_store as memory_store
+
+
+def test_memory_store_uses_model_dimension_and_environment(monkeypatch):
+    recorded = defaultdict(list)
+
+    class FakeModel:
+        def get_sentence_embedding_dimension(self):
+            return 768
+
+        def encode(self, text):
+            class _Vec:
+                def tolist(self):
+                    return [0.1] * 768
+
+            return _Vec()
+
+    def fake_sentence_transformer(name):
+        recorded["model_name"] = name
+        return FakeModel()
+
+    monkeypatch.setattr(memory_store, "SentenceTransformer", fake_sentence_transformer)
+
+    class FakeServerlessSpec:
+        def __init__(self, cloud, region):
+            recorded["spec_args"] = (cloud, region)
+            self.cloud = cloud
+            self.region = region
+
+    monkeypatch.setattr(memory_store, "ServerlessSpec", FakeServerlessSpec)
+
+    class FakeIndex:
+        def describe_index_stats(self):
+            return {"total_vector_count": 0}
+
+        def upsert(self, *args, **kwargs):
+            vectors = kwargs.get("vectors")
+            recorded["upsert"].append(vectors)
+
+    class FakePinecone:
+        def __init__(self, api_key):
+            recorded["api_key"] = api_key
+
+        def list_indexes(self):
+            class _List:
+                @staticmethod
+                def names():
+                    return []
+
+            return _List()
+
+        def create_index(self, **kwargs):
+            recorded["create"].append(kwargs)
+
+        def Index(self, name):
+            recorded["index_name"] = name
+            return FakeIndex()
+
+    monkeypatch.setattr(memory_store, "Pinecone", FakePinecone)
+
+    store = memory_store.MemoryStore(
+        api_key="test-key",
+        environment="us-west1-gcp",
+        index_name="adam-memory",
+        model_name="all-mpnet-base-v2",
+        cloud=None,
+        region=None,
+        batch_size=1,
+    )
+
+    store.ensure_foundational_memories(["memory"])
+
+    assert recorded["api_key"] == "test-key"
+    assert recorded["spec_args"] == ("gcp", "us-west1")
+    assert recorded["create"][0]["dimension"] == 768
+    assert store.dimension == 768
+    vectors = recorded["upsert"][0]
+    assert len(vectors[0][1]) == 768

@@ -75,6 +75,8 @@ if __name__ == "__main__":
         environment=config.PINECONE_ENVIRONMENT,
         index_name=config.PINECONE_INDEX_NAME,
         model_name=config.SENTENCE_MODEL,
+        cloud=getattr(config, 'PINECONE_CLOUD', None),
+        region=getattr(config, 'PINECONE_REGION', None),
     )
     memory_store.ensure_foundational_memories()
     psyche = PsycheClient(PSYCHE_LLM_API_URL)

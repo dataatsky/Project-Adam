@@ -10,13 +10,37 @@ load_dotenv(".env")
 PSYCHE_LLM_API_URL = os.getenv("PSYCHE_LLM_API_URL", "http://127.0.0.1:5000/")
 
 # Pinecone / embeddings
-PINECONE_API_KEY = os.getenv("PINECONE")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE")
 PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+PINECONE_CLOUD = os.getenv("PINECONE_CLOUD")
+PINECONE_REGION = os.getenv("PINECONE_REGION")
 SENTENCE_MODEL = os.getenv("SENTENCE_MODEL")
 
+
+def _infer_cloud_region(env: str | None) -> tuple[str | None, str | None]:
+    """Best-effort compatibility bridge from legacy environment strings."""
+    if not env:
+        return (None, None)
+    parts = env.split("-")
+    if len(parts) >= 3:
+        # e.g. us-west1-gcp → (gcp, us-west1)
+        region = "-".join(parts[:-1])
+        cloud = parts[-1]
+        return (cloud, region)
+    if len(parts) == 2:
+        # e.g. us-east-1 → assume aws
+        return (parts[0], parts[1])
+    return (None, env)
+
+
+if not PINECONE_CLOUD or not PINECONE_REGION:
+    inferred_cloud, inferred_region = _infer_cloud_region(PINECONE_ENVIRONMENT)
+    PINECONE_CLOUD = PINECONE_CLOUD or inferred_cloud
+    PINECONE_REGION = PINECONE_REGION or inferred_region
+
 # Logging
-LOG_FILE = os.getenv("LOG_FILE", "adam_loop.log")
+LOG_FILE = os.getenv("LOG_FILE", "adam_behavior_log.csv")
 
 # Loop pacing
 CYCLE_SLEEP = float(os.getenv("CYCLE_SLEEP", "5"))
