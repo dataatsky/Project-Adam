@@ -490,6 +490,152 @@ Ideas for expansion:
 
 ---
 
+## 15. Configuration Deep-Dive
+
+Project Adam reads its configuration from environment variables (via `.env`). The table below lists the most relevant values.
+
+| Category | Key | Description |
+| --- | --- | --- |
+| **Logging & Metrics** | `LOG_FILE` | CSV written by the loop (`adam_behavior_log.csv` by default). |
+| | `LOG_LEVEL` | Runtime log verbosity (DEBUG/INFO/…). |
+| **Psyche / LLM** | `PSYCHE_LLM_API_URL` | Where the subconscious Flask service is listening. |
+| | `OLLAMA_MODEL` | Model alias loaded by `psyche_ollama.py`. |
+| | `PSYCHE_TIMEOUT`, `PSYCHE_RETRIES`, `PSYCHE_BACKOFF` | Retry/backoff policy for psyche calls. |
+| **Pinecone Memory** | `PINECONE_API_KEY` | Serverless API key (legacy fallback: `PINECONE`). |
+| | `PINECONE_INDEX_NAME` | Name of the index used for long-term memories. |
+| | `PINECONE_CLOUD`, `PINECONE_REGION` | Serverless deployment (e.g. `aws`, `us-east-1`). If omitted, we infer them from `PINECONE_ENVIRONMENT`. |
+| | `SENTENCE_MODEL` | SentenceTransformer model; the memory store auto-detects its embedding dimension. |
+| **Loop Pacing** | `CYCLE_SLEEP` | Delay between cycles (seconds). |
+| | `IMAGINE_TOP_K` | Number of impulses fed into imagination/reflection. |
+| **Agent Personality** | `AGENT_STATUS_JSON` | JSON override for the full agent state. |
+| | `AGENT_MOOD`, `AGENT_LEVEL`, `AGENT_CURIOSITY`, `AGENT_BRAVERY`, `AGENT_CAUTION`, `AGENT_HUNGER`, `AGENT_GOAL` | Fine-grained overrides when not supplying JSON. |
+
+### Quick Checklist
+
+1. Duplicate `.env.example` (or create `.env`) and fill in `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `OLLAMA_MODEL`.
+2. Set `PINECONE_CLOUD` / `PINECONE_REGION` explicitly when using Pinecone serverless. Supported clouds include `aws`, `gcp`, `azure`.
+3. Adjust `CYCLE_SLEEP` for long experiments; shorter times increase responsiveness at the cost of CPU.
+4. Switch to `LOG_LEVEL=DEBUG` when diagnosing loop issues or new actions.
+
+---
+
+## 16. Memory Pipeline Overview
+
+With the upgraded `MemoryStore`, Project Adam adapts automatically to the embedding model’s dimension and Pinecone’s serverless API.
+
+```mermaid
+flowchart LR
+    subgraph Cognitive Loop
+        A[Observe / Orient]
+        A --> B[Imagine & Reflect]
+        B --> C[Act]
+        C --> D[(Narrative Event)]
+    end
+
+    D -->|append| E[CSV Log (`LOG_FILE`)]
+    D -->|upsert| F[MemoryStore]
+    F -->|encode| G[SentenceTransformer\n(auto dimension)]
+    G -->|vectors| H[Pinecone Serverless Index]
+    H -->|query| F
+    F -->|resonant memories| A
+
+    I[`PINECONE_API_KEY`, `PINECONE_CLOUD`, `PINECONE_REGION`]
+    I --> F
+```
+
+Highlights:
+
+- Embedding dimension is taken from `SentenceTransformer.get_sentence_embedding_dimension()`, preventing index mismatches.
+- Legacy environment strings such as `us-west1-gcp` are parsed to infer cloud/region when you have not set them explicitly.
+- Missing credentials degrade gracefully—cycles continue, but vector writes are skipped with warnings.
+
+---
+
+## 17. Tutorials
+
+### 17.1 Swap LLM Backends
+
+1. **Change the Ollama model**:
+
+   ```bash
+   # .env
+   OLLAMA_MODEL=llama3
+   ```
+
+   Restart `psyche_ollama.py` to load the model.
+
+2. **Point to an OpenAI-compatible gateway**:
+
+   ```bash
+   export PSYCHE_LLM_API_URL=http://localhost:8000
+   export OLLAMA_MODEL=gpt-4o-mini
+   ```
+
+   Replace the `ollama.chat` calls with the gateway’s SDK while keeping the same prompts and response contracts.
+
+3. **Mix models per endpoint**: call different providers inside `generate_impulse`, `imagine`, and `reflect` (e.g. cheaper model for imagination, larger model for reflection).
+
+> Increase `PSYCHE_TIMEOUT` if your hosted model takes longer to respond.
+
+### 17.2 Headless Experiment Pipeline
+
+1. Start the psyche service: `python psyche_ollama.py`.
+2. Launch the loop headlessly with custom pacing and log location:
+
+   ```bash
+   LOG_FILE=experiments/2025-09-14-fridge.csv \
+   CYCLE_SLEEP=1.5 \
+   python main.py --headless --cycles 200 --api-port 9090
+   ```
+
+3. Monitor via Prometheus-style metrics:
+
+   ```bash
+   curl http://127.0.0.1:9090/metrics | jq
+   ```
+
+4. Plot results quickly:
+
+   ```python
+   from analysis_utils import prepare_dataframe, plot_kpis
+
+   df = prepare_dataframe("experiments/2025-09-14-fridge.csv")
+   plot_kpis(df, rolling=5)
+   ```
+
+### 17.3 Add a New Action
+
+1. **Physics** – extend `text_world.py`:
+
+   ```python
+   if verb == "play" and target == "piano":
+       return {"success": True, "reason": "A mellow tune fills the room."}
+   ```
+
+   Add the `piano` object with relevant properties to a room.
+
+2. **Subconscious toolbox** – include the new verb in the prompt hint inside `psyche_ollama.py`.
+
+3. **Reflection hints** – optionally describe new consequences in `generate_reflection_prompt`.
+
+Restart the loop—Adam will begin exploring the new behavior once impulses surface.
+
+---
+
+## 18. Troubleshooting Cheatsheet
+
+| Symptom | Likely cause | Suggested fix |
+| --- | --- | --- |
+| GUI status shows “Subconscious offline” | LLM service unreachable. | Confirm `psyche_ollama.py` is running, API URL is correct, and no firewall blocks `PSYCHE_LLM_API_URL`. |
+| Memory queries always empty | Pinecone credentials missing or index dimension mismatch. | Verify `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, and ensure the index dimension matches `SentenceTransformer`. |
+| Loop hangs during Orient | LLM responses timing out. | Raise `PSYCHE_TIMEOUT`, reduce `IMAGINE_TOP_K`, or choose a lighter model. |
+| No CSV generated | `LOG_FILE` unwritable or process lacks permission. | Point `LOG_FILE` to a writable path and re-run. |
+| `/metrics` returns 500 | Flask API thread isn’t running in headless mode. | Start `main.py --headless` or restart the process. |
+
+Capture verbose logs with `LOG_LEVEL=DEBUG` and share them when filing issues.
+
+---
+
 ## ✅ Summary
 
 Project Adam is a sandbox for experimenting with **emergent AI behavior**:
