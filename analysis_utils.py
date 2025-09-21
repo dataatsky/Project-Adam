@@ -116,8 +116,13 @@ def compute_mismatch_rate(df: pd.DataFrame) -> pd.DataFrame:
             simulated = row.get("simulated_outcomes_parsed", [])
             if not isinstance(imagined, list) or not isinstance(simulated, list):
                 return None
-            n = max(1, len(imagined))
-            mism = sum(1 for i, s in zip(imagined, simulated) if i != s)
+            n = max(1, max(len(imagined), len(simulated)))
+            mism = 0
+            for idx in range(n):
+                i_txt = imagined[idx] if idx < len(imagined) else None
+                s_txt = simulated[idx] if idx < len(simulated) else None
+                if i_txt != s_txt:
+                    mism += 1
             return mism / n
         except Exception:
             return None

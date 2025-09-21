@@ -3,7 +3,24 @@ from typing import List, Tuple, Optional
 
 from sentence_transformers import SentenceTransformer
 from pinecone import Pinecone
+try:
+    from pinecone import ServerlessSpec
+except Exception:  # pragma: no cover - optional dependency in older SDKs
+    ServerlessSpec = None
 import logging
+
+
+def _parse_environment(env: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not env:
+        return (None, None)
+    parts = (env or "").split("-")
+    if len(parts) >= 3:
+        region = "-".join(parts[:-1])
+        cloud = parts[-1]
+        return (cloud, region)
+    if len(parts) == 2:
+        return (parts[0], parts[1])
+    return (None, env)
 
 
 FOUNDATIONAL_MEMORIES = [
@@ -23,7 +40,18 @@ class MemoryStore:
     On failures, methods degrade gracefully to no-ops.
     """
 
-    def __init__(self, *, api_key: Optional[str], environment: Optional[str], index_name: Optional[str], model_name: Optional[str], dimension: int = 384, batch_size: int = 5):
+    def __init__(
+        self,
+        *,
+        api_key: Optional[str],
+        environment: Optional[str],
+        index_name: Optional[str],
+        model_name: Optional[str],
+        cloud: Optional[str] = None,
+        region: Optional[str] = None,
+        dimension: Optional[int] = None,
+        batch_size: int = 5,
+    ):
         self.log = logging.getLogger(__name__ + ".MemoryStore")
         self.model = None
         self.pc = None
@@ -36,6 +64,12 @@ class MemoryStore:
         self._env = environment
         self._index_name = index_name
         self._model_name = model_name
+        self._cloud = (cloud or "").strip() or None
+        self._region = (region or "").strip() or None
+        if (not self._cloud or not self._region) and self._env:
+            inferred = _parse_environment(self._env)
+            self._cloud = self._cloud or inferred[0]
+            self._region = self._region or inferred[1]
 
     def _ensure_ready(self):
         # Initialize model lazily
@@ -44,20 +78,44 @@ class MemoryStore:
                 if self._model_name:
                     self.model = SentenceTransformer(self._model_name)
                     self.log.info("SentenceTransformer model loaded")
+                    try:
+                        dim = int(self.model.get_sentence_embedding_dimension())
+                        self.dimension = dim
+                    except Exception:
+                        pass
             except Exception as e:
                 self.log.warning(f"SentenceTransformer init failed: {e}")
                 self.model = None
+        if self.dimension is None:
+            # fall back to ST default miniLM size
+            self.dimension = 384
         # Initialize Pinecone lazily
-        if self.index is None and self._api_key and self._env and self._index_name:
+        if self.index is None and self._api_key and self._index_name:
             try:
-                self.pc = Pinecone(api_key=self._api_key, environment=self._env)
-                try:
-                    indexes = self.pc.list_indexes().names()
-                except Exception:
-                    indexes = self.pc.list_indexes()
-                if self._index_name not in indexes:
+                self.pc = self.pc or Pinecone(api_key=self._api_key)
+                indexes = self.pc.list_indexes()
+                if hasattr(indexes, "names"):
+                    names = set(indexes.names())
+                elif isinstance(indexes, (list, tuple, set)):
+                    names = set(indexes)
+                else:
+                    names = set(indexes or [])
+                if self._index_name not in names:
+                    if not ServerlessSpec:
+                        self.log.warning("Pinecone SDK missing ServerlessSpec; cannot auto-create index.")
+                        return
+                    cloud = self._cloud or "aws"
+                    region = self._region or "us-east-1"
+                    if not self._cloud or not self._region:
+                        self.log.info(f"Using default Pinecone location cloud={cloud} region={region}")
                     self.log.info(f"Creating Pinecone index: {self._index_name}")
-                    self.pc.create_index(name=self._index_name, dimension=self.dimension, metric="cosine")
+                    spec = ServerlessSpec(cloud=cloud, region=region)
+                    self.pc.create_index(
+                        name=self._index_name,
+                        dimension=int(self.dimension),
+                        metric="cosine",
+                        spec=spec,
+                    )
                 self.index = self.pc.Index(self._index_name)
                 self.log.info("Pinecone connection established")
             except Exception as e:

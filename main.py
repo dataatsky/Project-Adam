@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None):
         environment=config.PINECONE_ENVIRONMENT,
         index_name=config.PINECONE_INDEX_NAME,
         model_name=config.SENTENCE_MODEL,
+        cloud=getattr(config, 'PINECONE_CLOUD', None),
+        region=getattr(config, 'PINECONE_REGION', None),
         batch_size=getattr(config, 'MEMORY_UPSERT_BATCH', 5),
     )
     memory_store.ensure_foundational_memories()
