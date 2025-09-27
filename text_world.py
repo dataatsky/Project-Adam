@@ -8,6 +8,7 @@ class TextWorld:
         self.hunger = 0.2  # 0.0 (not hungry) to 1.0 (very hungry)
         self.mood_intensity = 0.4  # 0.0 (calm) to 1.0 (agitated)
         self.world_time = 0  # ticks (1 = 1 hour for simplicity)
+        self.recent_examined = {}
 
         self.world_state = {
             "living_room": {
@@ -62,6 +63,12 @@ class TextWorld:
         self.world_time += 1
         events = []
 
+        # Clear out stale examination markers so objects can resurface
+        cooldown = 3
+        stale = [obj for obj, t in self.recent_examined.items() if self.world_time - t > cooldown]
+        for obj in stale:
+            self.recent_examined.pop(obj, None)
+
         # Day/night cycle
         if self.world_time % 10 == 0:
             current_state = self.world_state["living_room"]["window"]["state"]
@@ -107,6 +114,14 @@ class TextWorld:
                 events.append("The computer shows an error screen.")
                 self.mood_intensity = min(1.0, self.mood_intensity + 0.05)
 
+        # Auto-close openable objects that have been left open for a while
+        for room in self.world_state.values():
+            for obj in room.values():
+                if isinstance(obj, dict) and obj.get("state") == "open" and "opened_at" in obj:
+                    if self.world_time - obj["opened_at"] >= 3:
+                        obj["state"] = "closed"
+                        obj.pop("opened_at", None)
+
         return events
 
     def get_world_state(self):
@@ -134,6 +149,8 @@ class TextWorld:
                 continue
             state = properties["state"]
             if obj in notable_states and state in notable_states[obj]:
+                if obj in self.recent_examined and self.world_time - self.recent_examined[obj] <= 3:
+                    continue
                 sensory_events.append(
                     {"type": "sight/sound", "object": obj, "details": state}
                 )
@@ -141,6 +158,12 @@ class TextWorld:
         perceivable_objects = [
             obj for obj in current_room_objects.keys() if obj != "exits"
         ]
+
+        # Occasionally surface an idle object to diversify curiosity stimuli
+        idle_candidates = [obj for obj in perceivable_objects if obj not in {evt.get("object") for evt in sensory_events}]
+        if idle_candidates and random.random() < 0.3:
+            idle_obj = random.choice(idle_candidates)
+            sensory_events.append({"type": "sight/sound", "object": idle_obj, "details": "idle"})
 
         return {
             "agent_location": self.agent_location,
@@ -181,6 +204,7 @@ class TextWorld:
 
         # --- Action logic ---
         if verb in ("examine", "investigate"):
+            self.recent_examined[target] = self.world_time
             return {"success": True, "reason": f"I looked at the {target}. State: {state}"}
 
         if verb == "read":
@@ -194,6 +218,7 @@ class TextWorld:
         if verb == "open":
             if "openable" in props and state != "open":
                 obj["state"] = "open"
+                obj["opened_at"] = self.world_time
                 return {"success": True, "reason": f"I opened the {target}."}
             self.mood_intensity = min(1.0, self.mood_intensity + 0.05)
             return {"success": False, "reason": f"I can't open {target}."}
@@ -201,6 +226,7 @@ class TextWorld:
         if verb == "close":
             if "openable" in props and state != "closed":
                 obj["state"] = "closed"
+                obj.pop("opened_at", None)
                 return {"success": True, "reason": f"I closed the {target}."}
             self.mood_intensity = min(1.0, self.mood_intensity + 0.05)
             return {"success": False, "reason": f"I can't close {target}."}

@@ -50,6 +50,7 @@ class CognitiveLoop:
         except Exception:
             self.cycle_sleep = 5.0
         self.security = None
+        self.recent_success_actions: list[tuple[str | None, str | None]] = []
 
     def attach_security(self, security):
         self.security = security
@@ -137,6 +138,7 @@ class CognitiveLoop:
             impulses = impulses or {}
             self.security.after_psyche("generate_impulse", payload, impulses)
         if impulses:
+            impulses = self._dampen_repeated_impulses(impulses)
             self.ui and self.ui.set_subconscious(
                 impulses.get("emotional_shift", {}),
                 impulses.get("impulses", []),
@@ -262,6 +264,11 @@ class CognitiveLoop:
         }
         self.log_cycle_data(cycle_data)
         self._ui_vitals()
+        if result.get("success"):
+            key = (action.get('verb'), action.get('target'))
+            self.recent_success_actions.append(key)
+            if len(self.recent_success_actions) > 6:
+                self.recent_success_actions.pop(0)
         if self.ui:
             try:
                 self.ui.update_kpis(kpis)
@@ -340,3 +347,24 @@ class CognitiveLoop:
             except Exception:
                 pass
             time.sleep(self.cycle_sleep)
+
+    # ------------------------------------------------------------------
+    def _dampen_repeated_impulses(self, impulses: dict) -> dict:
+        items = impulses.get('impulses') or []
+        if not items:
+            return impulses
+        counts = {}
+        for verb, target in self.recent_success_actions:
+            counts[(verb, target)] = counts.get((verb, target), 0) + 1
+        for imp in items:
+            verb = imp.get('verb')
+            target = imp.get('target')
+            streak = counts.get((verb, target), 0)
+            if streak >= 2:
+                try:
+                    urgency = float(imp.get('urgency', 0))
+                    imp['urgency'] = max(0.0, urgency * 0.35)
+                    imp['dampened'] = True
+                except Exception:
+                    pass
+        return impulses
