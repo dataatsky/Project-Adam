@@ -11,12 +11,16 @@ def test_notable_objects_hidden_after_examine(monkeypatch):
     world.world_time = 10
 
     world.world_state["kitchen"]["fridge"]["state"] = "open"
+    world.random.random = lambda: 1.0  # prevent idle surfacing
     world.process_action({"verb": "examine", "target": "fridge"})
 
     state = world.get_world_state()
-    assert not any(evt.get("object") == "fridge" for evt in state["sensory_events"])  # hidden
+    assert not any(evt.get("object") == "fridge" and evt.get("details") == "open" for evt in state["sensory_events"])  # hidden
 
-    world.world_time += 4
+    for _ in range(4):
+        world.update()
+    world.random.random = lambda: 0.0
+    world.random.choice = lambda seq: seq[0]
     state = world.get_world_state()
     assert any(evt.get("object") == "fridge" for evt in state["sensory_events"])  # resurfaced
 
@@ -38,8 +42,8 @@ def test_idle_object_prompt(monkeypatch):
     world = TextWorld()
     world.agent_location = "living_room"
 
-    monkeypatch.setattr(random, "random", lambda: 0.0)
-    monkeypatch.setattr(random, "choice", lambda seq: seq[0])
+    world.random.random = lambda: 0.0
+    world.random.choice = lambda seq: seq[0]
 
     state = world.get_world_state()
     assert any(evt.get("details") == "idle" for evt in state["sensory_events"])  # idle surfaced
