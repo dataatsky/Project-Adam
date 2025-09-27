@@ -12,6 +12,7 @@ from services.psyche_client import PsycheClient
 from loop.cognitive_loop import CognitiveLoop
 from api import create_app, add_metrics_route
 from constants import LOG_HEADERS
+from adamsec import get_runtime
 
 
 def main(argv: list[str] | None = None):
@@ -51,6 +52,9 @@ def main(argv: list[str] | None = None):
     if args.headless:
         ui = None
         brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=ui, memory=memory_store, psyche=psyche)
+        security = get_runtime(brain, psyche)
+        if getattr(security, "enabled", False):
+            brain.attach_security(security)
         loop_thread = threading.Thread(target=brain.run_loop, daemon=True)
         loop_thread.start()
 
@@ -100,6 +104,9 @@ def main(argv: list[str] | None = None):
 
         # Start cognitive loop
         brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=app_gui, memory=memory_store, psyche=psyche)
+        security = get_runtime(brain, psyche)
+        if getattr(security, "enabled", False):
+            brain.attach_security(security)
         app_gui.set_brain(brain)
         loop_thread = threading.Thread(target=brain.run_loop, daemon=True)
         loop_thread.start()

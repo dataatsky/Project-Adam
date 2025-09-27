@@ -636,6 +636,10 @@ Capture verbose logs with `LOG_LEVEL=DEBUG` and share them when filing issues.
 
 ---
 
+For details on the optional security simulation harness (**AdamSec**), see `adamsec/README.md`.
+
+---
+
 ## ✅ Summary
 
 Project Adam is a sandbox for experimenting with **emergent AI behavior**:

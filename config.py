@@ -47,6 +47,11 @@ CYCLE_SLEEP = float(os.getenv("CYCLE_SLEEP", "5"))
 IMAGINE_TOP_K = int(os.getenv("IMAGINE_TOP_K", "3"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
+# Security harness
+ADAMSEC_ENABLED = os.getenv("ADAMSEC_ENABLED", "0") not in {"0", "false", "False", ""}
+ADAMSEC_PLAYBOOK = os.getenv("ADAMSEC_PLAYBOOK")
+ADAMSEC_LOG = os.getenv("ADAMSEC_LOG", "security_events.log")
+
 # Psyche client
 PSYCHE_TIMEOUT = float(os.getenv("PSYCHE_TIMEOUT", "30"))
 PSYCHE_RETRIES = int(os.getenv("PSYCHE_RETRIES", "2"))

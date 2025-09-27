@@ -49,6 +49,12 @@ class CognitiveLoop:
             self.cycle_sleep = float(getattr(config, "CYCLE_SLEEP", 5.0))
         except Exception:
             self.cycle_sleep = 5.0
+        self.security = None
+
+    def attach_security(self, security):
+        self.security = security
+        if hasattr(self.security, "context"):
+            self.security.context.loop = self
 
     def log_cycle_data(self, cycle_data):
         import csv
@@ -122,9 +128,14 @@ class CognitiveLoop:
             "world_state": world_state,
             "resonant_memories": self.last_resonant_memories,
         }
+        if self.security:
+            payload = self.security.before_psyche("generate_impulse", payload)
         impulses = None
         if self.psyche:
             impulses = self.psyche.generate_impulse(payload)
+        if self.security:
+            impulses = impulses or {}
+            self.security.after_psyche("generate_impulse", payload, impulses)
         if impulses:
             self.ui and self.ui.set_subconscious(
                 impulses.get("emotional_shift", {}),
@@ -158,8 +169,12 @@ class CognitiveLoop:
         }
         reflection = {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank."}
         if self.psyche:
+            if self.security:
+                payload = self.security.before_psyche("reflect", payload)
             reflection = self.psyche.reflect(payload)
             self.log.debug(f"Reflection: {reflection.get('reasoning')}")
+        if self.security:
+            self.security.after_psyche("reflect", payload, reflection)
         return reflection
 
     def decide(self, final_action, reasoning):
@@ -256,14 +271,32 @@ class CognitiveLoop:
 
     def run_loop(self):
         world = self.world_factory()
+        if self.security:
+            self.security.update_world(world)
         while self.is_running:
             if self.paused and not self._step_flag:
                 time.sleep(0.1)
                 continue
             self.cycle_counter += 1
+            if self.security:
+                self.security.before_cycle(self.cycle_counter)
             world.update()
             self.agent_status['needs']['hunger'] = min(1, self.agent_status['needs']['hunger'] + 0.005)
             ws = world.get_world_state()
+            if self.security:
+                ws = self.security.modify_world_state(ws)
+                try:
+                    from adamsec import guards
+
+                    flags = guards.verify_world_state(ws)
+                    if flags.get("conflict"):
+                        self.security.emit(
+                            "security.guard.world_conflict",
+                            cycle=self.cycle_counter,
+                            location=world.agent_location,
+                        )
+                except Exception:
+                    self.log.debug("Security guard verification failed", exc_info=True)
             full = self.observe(ws)
             impulses = self.orient(full)
             if impulses:
