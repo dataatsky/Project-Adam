@@ -1,4 +1,5 @@
 from collections import defaultdict
+import sys
 
 import services.memory_store as memory_store
 
@@ -68,6 +69,7 @@ def test_memory_store_uses_model_dimension_and_environment(monkeypatch):
         cloud=None,
         region=None,
         batch_size=1,
+        backend="pinecone",
     )
 
     store.ensure_foundational_memories(["memory"])
@@ -78,3 +80,76 @@ def test_memory_store_uses_model_dimension_and_environment(monkeypatch):
     assert store.dimension == 768
     vectors = recorded["upsert"][0]
     assert len(vectors[0][1]) == 768
+
+
+def test_memory_store_chroma_backend(monkeypatch, tmp_path):
+    recorded = defaultdict(list)
+
+    class FakeModel:
+        def get_sentence_embedding_dimension(self):
+            return 512
+
+        def encode(self, text):
+            class _Vec:
+                def tolist(self):
+                    return [0.2] * 512
+
+            return _Vec()
+
+    def fake_sentence_transformer(name):
+        recorded["model_name"] = name
+        return FakeModel()
+
+    monkeypatch.setattr(memory_store, "SentenceTransformer", fake_sentence_transformer)
+
+    class FakeCollection:
+        def __init__(self):
+            self.docs = []
+
+        def count(self):
+            return len(self.docs)
+
+        def upsert(self, ids, embeddings, documents, metadatas):
+            recorded["upsert"].append({
+                "ids": ids,
+                "documents": documents,
+                "metadatas": metadatas,
+            })
+            for doc in documents:
+                self.docs.append(doc)
+
+        def query(self, query_embeddings, n_results):
+            return {"documents": [self.docs[:n_results]]}
+
+    class FakeClient:
+        def __init__(self, path):
+            recorded["chroma_path"] = path
+            self.collection = FakeCollection()
+
+        def get_or_create_collection(self, name, metadata=None):
+            recorded["collection_name"] = name
+            recorded["collection_metadata"] = metadata
+            return self.collection
+
+    fake_module = type("FakeChromadb", (), {"PersistentClient": FakeClient})
+    monkeypatch.setitem(sys.modules, "chromadb", fake_module)
+
+    store = memory_store.MemoryStore(
+        api_key=None,
+        environment=None,
+        index_name="adam-memory",
+        model_name="all-mpnet-base-v2",
+        backend="chroma",
+        chroma_path=str(tmp_path / "chroma"),
+        batch_size=1,
+    )
+
+    store.ensure_foundational_memories(["foundational"])
+    store.upsert_texts(["hello world"])
+    store.flush()
+
+    res = store.query_similar_texts("hello", top_k=1)
+    if res:
+        assert res[0] in {"foundational", "hello world"}
+    assert recorded["collection_name"] == "adam-memory"
+    assert recorded["model_name"] == "all-mpnet-base-v2"

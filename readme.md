@@ -501,10 +501,13 @@ Project Adam reads its configuration from environment variables (via `.env`). Th
 | **Psyche / LLM** | `PSYCHE_LLM_API_URL` | Where the subconscious Flask service is listening. |
 | | `OLLAMA_MODEL` | Model alias loaded by `psyche_ollama.py`. |
 | | `PSYCHE_TIMEOUT`, `PSYCHE_RETRIES`, `PSYCHE_BACKOFF` | Retry/backoff policy for psyche calls. |
-| **Pinecone Memory** | `PINECONE_API_KEY` | Serverless API key (legacy fallback: `PINECONE`). |
-| | `PINECONE_INDEX_NAME` | Name of the index used for long-term memories. |
-| | `PINECONE_CLOUD`, `PINECONE_REGION` | Serverless deployment (e.g. `aws`, `us-east-1`). If omitted, we infer them from `PINECONE_ENVIRONMENT`. |
-| | `SENTENCE_MODEL` | SentenceTransformer model; the memory store auto-detects its embedding dimension. |
+| **Memory Backend** | `MEMORY_BACKEND` | Choose `chroma` (default, local persistent store) or `pinecone` (managed service). |
+| | `CHROMA_PATH` | Filesystem path for Chroma’s persistent data (default `./chroma`). |
+| | `CHROMA_COLLECTION` | Collection name used by Chroma (defaults to `PINECONE_INDEX_NAME` or `adam-memory`). |
+| **Pinecone (optional)** | `PINECONE_API_KEY` | API key when using the Pinecone backend (fallback env: `PINECONE`). |
+| | `PINECONE_INDEX_NAME` | Index name for Pinecone memories. |
+| | `PINECONE_CLOUD`, `PINECONE_REGION` | Serverless deployment (e.g. `aws`, `us-east-1`). Inferred from `PINECONE_ENVIRONMENT` if unset. |
+| **Embeddings** | `SENTENCE_MODEL` | SentenceTransformer model; the memory store auto-detects embedding dimension. |
 | **Loop Pacing** | `CYCLE_SLEEP` | Delay between cycles (seconds). |
 | | `IMAGINE_TOP_K` | Number of impulses fed into imagination/reflection. |
 | **Agent Personality** | `AGENT_STATUS_JSON` | JSON override for the full agent state. |
@@ -513,7 +516,7 @@ Project Adam reads its configuration from environment variables (via `.env`). Th
 ### Quick Checklist
 
 1. Duplicate `.env.example` (or create `.env`) and fill in `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `OLLAMA_MODEL`.
-2. Set `PINECONE_CLOUD` / `PINECONE_REGION` explicitly when using Pinecone serverless. Supported clouds include `aws`, `gcp`, `azure`.
+2. By default the loop persists memories locally with Chroma (`MEMORY_BACKEND=chroma`). To switch back to Pinecone, set `MEMORY_BACKEND=pinecone` and supply `PINECONE_*` env vars.
 3. Adjust `CYCLE_SLEEP` for long experiments; shorter times increase responsiveness at the cost of CPU.
 4. Switch to `LOG_LEVEL=DEBUG` when diagnosing loop issues or new actions.
 
