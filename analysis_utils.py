@@ -45,6 +45,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         "emotional_delta",
         "kpis",
         "snapshot",
+        "goal_step",
     ]
     for col in json_cols:
         if col in df.columns:
@@ -316,6 +317,7 @@ def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
         "location", "mood", "mood_intensity",
         "sensory_events", "resonant_memories", "impulses", "chosen_action", "action_result",
         "imagined_outcomes", "simulated_outcomes", "emotional_delta", "kpis", "snapshot",
+        "current_goal", "goal_step",
     ]
     df = _read_log_csv(csv_path, headers)
     df = clean_dataframe(df)

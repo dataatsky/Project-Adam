@@ -235,6 +235,8 @@ class CognitiveLoop:
         # Push to UI
         self.ui and self.ui.set_insights(badges=badges, cards=cards, causal_line=causal, threads=threads)
         # Log CSV with extended fields
+        goal_state = world_state.get('goal') if isinstance(world_state, dict) else None
+        goal_step = world_state.get('goal_step') if isinstance(world_state, dict) else None
         cycle_data = {
             "timestamp": time.time(),
             "cycle_num": self.cycle_counter,
@@ -261,6 +263,8 @@ class CognitiveLoop:
                 "emotional_delta": emotional_delta,
                 "kpis": kpis,
             }, ensure_ascii=False),
+            "current_goal": goal_state or "",
+            "goal_step": json.dumps(goal_step, ensure_ascii=False) if goal_step else "",
         }
         self.log_cycle_data(cycle_data)
         self._ui_vitals()

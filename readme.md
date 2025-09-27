@@ -478,6 +478,25 @@ au = importlib.reload(au)
 
 ---
 
+### Interactive Dashboard (Streamlit)
+
+For a shareable web view of Adam’s runs, launch the Streamlit app:
+
+```bash
+streamlit run dashboards/streamlit_app.py
+```
+
+Use the sidebar to point at a CSV log (defaults to `LOG_FILE`) and explore:
+
+* Mood and loop-score trends across cycles.
+* Loop alerts filtered by a configurable threshold.
+* Goal progression timeline showing which tasks Adam pursued/completed.
+* Object engagement heatmap (verbs × targets) highlighting interaction patterns.
+
+The dashboard is read-only and loads historical logs; the live Psyche Monitor GUI remains the cockpit for real-time runs.
+
+---
+
 ## 14. Extending the Project
 
 Ideas for expansion:
