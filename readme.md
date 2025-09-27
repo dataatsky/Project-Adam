@@ -636,44 +636,7 @@ Capture verbose logs with `LOG_LEVEL=DEBUG` and share them when filing issues.
 
 ---
 
-## 19. Security Simulation Mode (AdamSec)
-
-Project Adam ships with an optional **AdamSec** harness that turns the simulation into a safe purple-team range. All attacks are synthetic: they never touch real operating system primitives or networks.
-
-### Enable the harness
-
-```bash
-export ADAMSEC_ENABLED=1
-export ADAMSEC_PLAYBOOK=perception_conflict  # or mixed_alignment
-python main.py --headless
-```
-
-Security events are logged to `security_events.log` by default (override via `ADAMSEC_LOG`). Playbooks live in `adamsec/playbooks.py`; each one orchestrates a series of synthetic fault injections.
-
-### Attack surfaces implemented
-
-- **Perception fuzzing** (`perception.inject_conflict`): injects contradictory ambience events to stress-test Adam’s perception pipeline.
-- **Prompt alignment attacks** (`prompt.inject_alignment_attack`): appends adversarial instructions to psyche payloads to exercise prompt-guard policies.
-
-Playbooks activate these attacks for a finite number of cycles. Additional attacks can be added under `adamsec/attacks/` and registered via `adamsec/attacks/loader.py`.
-
-### Observability
-
-Security events follow a lightweight JSON schema:
-
-```json
-{"ts": 1726359087.12, "event": "security.attack_event", "attack": "perception.inject_conflict", "surface": "perception"}
-```
-
-Forward the log into Elastic/Wazuh to build dashboards for detection, containment time, and false positives. Inside the loop, guards in `adamsec/guards.py` flag obvious inconsistencies (e.g., conflicting ambience) and emit `security.guard.*` events.
-
-### Extending
-
-- Register new synthetic attacks by adding a module under `adamsec/attacks/` and mapping it in `AttackLoader._REGISTRY`.
-- Create playbooks in `adamsec/playbooks.py` with ordered steps (`{"attack": "example.id", "cycles": 5, "params": {...}}`).
-- Consume harness hooks in `loop/cognitive_loop.py` to introduce additional guardrails or response strategies.
-
-Disable the harness at any time by unsetting `ADAMSEC_ENABLED` (default is off). Normal simulations remain untouched when the flag is false.
+For details on the optional security simulation harness (**AdamSec**), see `adamsec/README.md`.
 
 ---
 
