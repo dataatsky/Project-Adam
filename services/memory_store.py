@@ -1,4 +1,5 @@
 import time
+import uuid
 from typing import List, Tuple, Optional
 
 from sentence_transformers import SentenceTransformer
@@ -35,7 +36,7 @@ FOUNDATIONAL_MEMORIES = [
 
 
 class MemoryStore:
-    """Wrapper around SentenceTransformer + Pinecone index.
+    """Wrapper around SentenceTransformer + vector store (Chroma or Pinecone).
 
     On failures, methods degrade gracefully to no-ops.
     """
@@ -51,6 +52,9 @@ class MemoryStore:
         region: Optional[str] = None,
         dimension: Optional[int] = None,
         batch_size: int = 5,
+        backend: str = "chroma",
+        chroma_path: Optional[str] = None,
+        chroma_collection: Optional[str] = None,
     ):
         self.log = logging.getLogger(__name__ + ".MemoryStore")
         self.model = None
@@ -59,10 +63,12 @@ class MemoryStore:
         self.dimension = dimension
         self._batch_size = int(batch_size)
         self._buffer: List[str] = []
+        self._backend = (backend or "chroma").strip().lower()
+
         # Defer heavy init until first use
         self._api_key = api_key
         self._env = environment
-        self._index_name = index_name
+        self._index_name = index_name or "adam-memory"
         self._model_name = model_name
         self._cloud = (cloud or "").strip() or None
         self._region = (region or "").strip() or None
@@ -70,6 +76,12 @@ class MemoryStore:
             inferred = _parse_environment(self._env)
             self._cloud = self._cloud or inferred[0]
             self._region = self._region or inferred[1]
+
+        # Chroma specific fields
+        self._chroma_path = chroma_path or "./chroma"
+        self._chroma_collection = chroma_collection or self._index_name
+        self._chroma_client = None
+        self._chroma_collection_handle = None
 
     def _ensure_ready(self):
         # Initialize model lazily
@@ -89,7 +101,16 @@ class MemoryStore:
         if self.dimension is None:
             # fall back to ST default miniLM size
             self.dimension = 384
-        # Initialize Pinecone lazily
+        if self._backend == "pinecone":
+            self._ensure_pinecone_ready()
+        elif self._backend == "chroma":
+            self._ensure_chroma_ready()
+        else:
+            if not hasattr(self, "_backend_warned"):
+                self.log.warning(f"Unknown memory backend '{self._backend}'. Falling back to no-op store.")
+                self._backend_warned = True
+
+    def _ensure_pinecone_ready(self):
         if self.index is None and self._api_key and self._index_name:
             try:
                 self.pc = self.pc or Pinecone(api_key=self._api_key)
@@ -122,51 +143,87 @@ class MemoryStore:
                 self.log.warning(f"Pinecone init failed: {e}")
                 self.index = None
 
+    def _ensure_chroma_ready(self):
+        if self._chroma_collection_handle is not None:
+            return
+        try:
+            import chromadb
+
+            if self._chroma_client is None:
+                self._chroma_client = chromadb.PersistentClient(path=self._chroma_path)
+            metadata = {"hnsw:space": "cosine"}
+            self._chroma_collection_handle = self._chroma_client.get_or_create_collection(
+                name=self._chroma_collection,
+                metadata=metadata,
+            )
+            self.log.info("Chroma collection ready at %s", self._chroma_path)
+        except Exception as e:
+            self.log.warning(f"Chroma init failed: {e}")
+            self._chroma_collection_handle = None
+
     def get_total_count(self) -> int:
         try:
             self._ensure_ready()
-            if not self.index:
-                return 0
-            stats = self.index.describe_index_stats()
-            return int(stats.get("total_vector_count", 0))
+            if self._backend == "pinecone" and self.index:
+                stats = self.index.describe_index_stats()
+                return int(stats.get("total_vector_count", 0))
+            if self._backend == "chroma" and self._chroma_collection_handle:
+                return int(self._chroma_collection_handle.count())
+            return 0
         except Exception:
             return 0
 
     def ensure_foundational_memories(self, memories: Optional[List[str]] = None):
         self._ensure_ready()
-        if not self.index or not self.model:
+        if not self.model:
             return
         try:
-            stats = self.index.describe_index_stats()
-            if stats.get("total_vector_count", 0) == 0:
-                self.log.info("Pre-populating Pinecone with foundational memories …")
-                vectors: List[Tuple[str, List[float], dict]] = []
-                for i, text in enumerate(memories or FOUNDATIONAL_MEMORIES):
-                    vec = self.model.encode(text).tolist()
-                    meta = {"text": text, "timestamp": time.time(), "type": "foundational"}
-                    vectors.append((str(i), vec, meta))
-                self.index.upsert(vectors=vectors)
-                self.log.info(f"Added {len(vectors)} foundational memories")
-            else:
-                self.log.info("Found existing memories, skipping pre-population")
+            memories = memories or FOUNDATIONAL_MEMORIES
+            if self._backend == "pinecone" and self.index:
+                stats = self.index.describe_index_stats()
+                if stats.get("total_vector_count", 0) == 0:
+                    self.log.info("Pre-populating Pinecone with foundational memories …")
+                    vectors: List[Tuple[str, List[float], dict]] = []
+                    for i, text in enumerate(memories):
+                        vec = self.model.encode(text).tolist()
+                        meta = {"text": text, "timestamp": time.time(), "type": "foundational"}
+                        vectors.append((str(i), vec, meta))
+                    if vectors:
+                        self.index.upsert(vectors=vectors)
+                        self.log.info(f"Added {len(vectors)} foundational memories")
+                else:
+                    self.log.info("Found existing memories, skipping pre-population")
+            elif self._backend == "chroma" and self._chroma_collection_handle:
+                if self._chroma_collection_handle.count() == 0:
+                    self.log.info("Pre-populating Chroma with foundational memories …")
+                    self._write_chroma_batch(memories, memory_type="foundational")
+                else:
+                    self.log.info("Found existing Chroma memories, skipping pre-population")
         except Exception as e:
             self.log.warning(f"Foundational pre-population failed: {e}")
 
     def query_similar_texts(self, text: str, top_k: int = 3) -> List[str]:
         self._ensure_ready()
-        if not text or not self.model or not self.index:
+        if not text or not self.model:
             return []
         try:
             vec = self.model.encode(text).tolist()
-            res = self.index.query(vector=vec, top_k=top_k, include_metadata=True)
-            return [m["metadata"]["text"] for m in res.get("matches", []) if m.get("metadata")]
+            if self._backend == "pinecone" and self.index:
+                res = self.index.query(vector=vec, top_k=top_k, include_metadata=True)
+                return [m["metadata"]["text"] for m in res.get("matches", []) if m.get("metadata")]
+            if self._backend == "chroma" and self._chroma_collection_handle:
+                result = self._chroma_collection_handle.query(query_embeddings=[vec], n_results=top_k)
+                documents = result.get("documents") or []
+                if documents:
+                    return [doc for doc in documents[0] if doc]
+            return []
         except Exception as e:
             self.log.warning(f"Memory query failed: {e}")
             return []
 
     def upsert_texts(self, texts: List[str]):
         self._ensure_ready()
-        if not self.model or not self.index:
+        if not self.model:
             return
         try:
             # Bufferize inputs for batch upserts
@@ -174,33 +231,48 @@ class MemoryStore:
                 if isinstance(t, str) and t.strip():
                     self._buffer.append(t)
             if len(self._buffer) >= self._batch_size:
-                # flush
-                base = self.get_total_count()
                 to_write = self._buffer[: self._batch_size]
                 self._buffer = self._buffer[self._batch_size:]
-                vectors = []
-                for i, text in enumerate(to_write):
-                    vec = self.model.encode(text).tolist()
-                    meta = {"text": text, "timestamp": time.time(), "type": "narrative"}
-                    vectors.append((str(base + i), vec, meta))
-                if vectors:
-                    self.index.upsert(vectors=vectors)
+                self._write_batch(to_write)
         except Exception as e:
             self.log.warning(f"Upsert texts failed: {e}")
 
     def flush(self):
         self._ensure_ready()
-        if not self.model or not self.index or not self._buffer:
+        if not self.model or not self._buffer:
             return
         try:
-            base = self.get_total_count()
-            vectors = []
-            for i, text in enumerate(self._buffer):
-                vec = self.model.encode(text).tolist()
-                meta = {"text": text, "timestamp": time.time(), "type": "narrative"}
-                vectors.append((str(base + i), vec, meta))
-            if vectors:
-                self.index.upsert(vectors=vectors)
+            self._write_batch(self._buffer)
             self._buffer = []
         except Exception as e:
             self.log.warning(f"Flush failed: {e}")
+
+    # ------------------------------------------------------------------
+    def _write_batch(self, texts: List[str]):
+        if not texts:
+            return
+        if self._backend == "pinecone" and self.index:
+            self._write_pinecone_batch(texts)
+        elif self._backend == "chroma" and self._chroma_collection_handle:
+            self._write_chroma_batch(texts)
+
+    def _write_pinecone_batch(self, texts: List[str], memory_type: str = "narrative"):
+        base = self.get_total_count()
+        vectors = []
+        for i, text in enumerate(texts):
+            vec = self.model.encode(text).tolist()
+            meta = {"text": text, "timestamp": time.time(), "type": memory_type}
+            vectors.append((str(base + i), vec, meta))
+        if vectors:
+            self.index.upsert(vectors=vectors)
+
+    def _write_chroma_batch(self, texts: List[str], memory_type: str = "narrative"):
+        ids = [str(uuid.uuid4()) for _ in texts]
+        embeddings = [self.model.encode(text).tolist() for text in texts]
+        metadatas = [{"timestamp": time.time(), "type": memory_type} for _ in texts]
+        self._chroma_collection_handle.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=texts,
+            metadatas=metadatas,
+        )

@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None):
         model_name=config.SENTENCE_MODEL,
         cloud=getattr(config, 'PINECONE_CLOUD', None),
         region=getattr(config, 'PINECONE_REGION', None),
+        backend=getattr(config, 'MEMORY_BACKEND', 'chroma'),
+        chroma_path=getattr(config, 'CHROMA_PATH', './chroma'),
+        chroma_collection=getattr(config, 'CHROMA_COLLECTION', config.PINECONE_INDEX_NAME or 'adam-memory'),
         batch_size=getattr(config, 'MEMORY_UPSERT_BATCH', 5),
     )
     memory_store.ensure_foundational_memories()

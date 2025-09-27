@@ -17,6 +17,11 @@ PINECONE_CLOUD = os.getenv("PINECONE_CLOUD")
 PINECONE_REGION = os.getenv("PINECONE_REGION")
 SENTENCE_MODEL = os.getenv("SENTENCE_MODEL")
 
+# Local vector store (Chroma)
+MEMORY_BACKEND = (os.getenv("MEMORY_BACKEND", "chroma") or "chroma").strip().lower()
+CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma")
+CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", PINECONE_INDEX_NAME or "adam-memory")
+
 
 def _infer_cloud_region(env: str | None) -> tuple[str | None, str | None]:
     """Best-effort compatibility bridge from legacy environment strings."""

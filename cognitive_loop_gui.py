@@ -77,6 +77,9 @@ if __name__ == "__main__":
         model_name=config.SENTENCE_MODEL,
         cloud=getattr(config, 'PINECONE_CLOUD', None),
         region=getattr(config, 'PINECONE_REGION', None),
+        backend=getattr(config, 'MEMORY_BACKEND', 'chroma'),
+        chroma_path=getattr(config, 'CHROMA_PATH', './chroma'),
+        chroma_collection=getattr(config, 'CHROMA_COLLECTION', config.PINECONE_INDEX_NAME or 'adam-memory'),
     )
     memory_store.ensure_foundational_memories()
     psyche = PsycheClient(PSYCHE_LLM_API_URL)
