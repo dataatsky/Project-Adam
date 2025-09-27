@@ -241,7 +241,11 @@ def generate_impulse():
         if last_exc:
             raise last_exc
 
-        llm_json = safe_json_loads(response["message"]["content"])
+        llm_json = safe_json_loads(response["message"]["content"]) or {}
+        if "emotional_shift" not in llm_json:
+            llm_json["emotional_shift"] = {"mood": "neutral", "level_delta": 0.0, "reason": "fallback"}
+        if "impulses" not in llm_json or llm_json.get("impulses") is None:
+            llm_json["impulses"] = []
         out = GenerateImpulseResponse.model_validate(normalize_impulses(llm_json)).model_dump()
         REQS.labels(endpoint, "200").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
@@ -343,8 +347,12 @@ def reflect():
         if last_exc:
             raise last_exc
 
-        llm_json = safe_json_loads(response["message"]["content"])
-        out = ReflectResponse.model_validate(llm_json or {"final_action": {"verb": "wait", "target": None}, "reasoning": "fallback"}).model_dump()
+        llm_json = safe_json_loads(response["message"]["content"]) or {}
+        if "final_action" not in llm_json:
+            llm_json["final_action"] = {"verb": "wait", "target": None}
+        if "reasoning" not in llm_json:
+            llm_json["reasoning"] = "fallback"
+        out = ReflectResponse.model_validate(llm_json).model_dump()
         REQS.labels(endpoint, "200").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify(out)
