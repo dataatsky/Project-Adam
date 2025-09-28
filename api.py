@@ -20,8 +20,10 @@ def create_app(get_brain):
                 "hunger": brain.agent_status['needs']['hunger'],
                 "recent_impulses": recent_impulses[:3],
                 "recent_memories": recent_memories[-3:],
+                "recent_diaries": [entry.get("text") for entry in getattr(brain, "diary_entries", [])[-3:]],
                 "current_goal": getattr(brain, "active_goal", {}).get("name") if hasattr(brain, "active_goal") else None,
                 "kpis": brain.insight.compute_kpis() if getattr(brain, "insight", None) else {},
+                "relationships": brain.current_world_state.get("relationships", {}) if getattr(brain, "current_world_state", None) else {},
             }
             return jsonify(state)
         except Exception as exc:
@@ -38,6 +40,7 @@ def _safe_brain_state(brain):
             "hunger": brain.agent_status['needs']['hunger'],
             "kpis": brain.insight.compute_kpis() if getattr(brain, "insight", None) else {},
             "current_goal": getattr(brain, "active_goal", {}).get("name") if hasattr(brain, "active_goal") else None,
+            "relationships": brain.current_world_state.get("relationships", {}) if getattr(brain, "current_world_state", None) else {},
         }
         return state
     except Exception:

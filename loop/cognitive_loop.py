@@ -52,6 +52,8 @@ class CognitiveLoop:
         self.security = None
         self.recent_success_actions: list[tuple[str | None, str | None]] = []
         self.last_impulses: list[dict] = []
+        self.diary_entries: list[dict] = []
+        self._last_diary_cycle = 0
 
     def attach_security(self, security):
         self.security = security
@@ -131,6 +133,7 @@ class CognitiveLoop:
             "current_state": self.agent_status,
             "world_state": world_state,
             "resonant_memories": self.last_resonant_memories,
+            "recent_diaries": [entry.get("text") for entry in self.diary_entries[-3:]],
         }
         if self.security:
             payload = self.security.before_psyche("generate_impulse", payload)
@@ -360,6 +363,45 @@ class CognitiveLoop:
             except Exception:
                 pass
             time.sleep(self.cycle_sleep)
+            self._maybe_self_reflect()
+
+    # ------------------------------------------------------------------
+    def _maybe_self_reflect(self):
+        if self.cycle_counter <= 0:
+            return
+        if self.cycle_counter % 5 != 0:
+            return
+
+        kpis = self.insight.compute_kpis() if self.insight else {}
+        diary_text = (
+            f"Cycle {self.cycle_counter}: Mood {self.current_mood} (intensity {self.mood_intensity:.2f}); "
+            f"Recent action: {self.recent_memories[-1] if self.recent_memories else 'none'}; "
+            f"Frustration {kpis.get('frustration')}; Success rate {kpis.get('goal_progress')}"
+        )
+        entry = {"cycle": self.cycle_counter, "text": diary_text}
+        self.diary_entries.append(entry)
+        if len(self.diary_entries) > 10:
+            self.diary_entries.pop(0)
+        self.recent_memories.append(f"Diary entry: {diary_text}")
+        if len(self.recent_memories) > 5:
+            self.recent_memories.pop(0)
+        try:
+            if self.memory:
+                self.memory.upsert_texts([diary_text])
+        except Exception:
+            pass
+
+        # Adjust mood slightly based on reflection outcome
+        frustration = kpis.get('frustration', 0)
+        if frustration and frustration > 0.6:
+            self.agent_status['emotional_state']['mood'] = 'determined'
+            self.agent_status['emotional_state']['level'] = min(1.0, self.agent_status['emotional_state']['level'] + 0.05)
+        else:
+            self.agent_status['emotional_state']['mood'] = self.current_mood
+            self.agent_status['emotional_state']['level'] = max(0.0, self.agent_status['emotional_state']['level'] - 0.02)
+        self.current_mood = self.agent_status['emotional_state']['mood']
+        self.mood_intensity = self.agent_status['emotional_state']['level']
+
 
     # ------------------------------------------------------------------
     def _dampen_repeated_impulses(self, impulses: dict) -> dict:

@@ -90,6 +90,12 @@ GOAL_LIBRARY = [
             {"room": "bedroom", "action": "use", "target": "journal"},
         ],
     },
+    {
+        "name": "Assist the neighbor",
+        "steps": [
+            {"room": "living_room", "action": "help", "target": "neighbor"},
+        ],
+    },
 ]
 
 
@@ -127,6 +133,9 @@ class TextWorld:
         self.neighbor_state = {"awaiting_help": False, "last_visit": None}
         self.active_goal: Optional[Dict] = None
         self.goal_progress_index = 0
+        self.current_goal_steps_done: List[Dict] = []
+        self.goal_history: List[Dict] = []
+        self.relationships = {"neighbor": {"trust": 0.5, "last_request": None}}
         self.world_state = self._generate_layout()
         self._choose_environment_theme()
         self._ensure_goal()
@@ -166,6 +175,7 @@ class TextWorld:
             goal = copy.deepcopy(self.random.choice(GOAL_LIBRARY))
             self.active_goal = goal
             self.goal_progress_index = 0
+            self.current_goal_steps_done = []
 
     def time_of_day(self):
         cycle = self.world_time % 24
@@ -227,9 +237,17 @@ class TextWorld:
 
         # scheduled neighbor visit every 12 ticks
         if self.world_time % 12 == 0 and not self.neighbor_state["awaiting_help"]:
-            self.neighbor_state.update({"awaiting_help": True, "last_visit": self.world_time})
+            self.neighbor_state.update({"awaiting_help": True, "last_visit": self.world_time, "request_cycle": self.world_time})
             events.append("A neighbor knocked and asked for help with a package.")
             self.noise_level = min(1.0, self.noise_level + 0.2)
+            self.relationships["neighbor"]["last_request"] = self.world_time
+
+        req_cycle = self.neighbor_state.get("request_cycle")
+        if self.neighbor_state.get("awaiting_help") and req_cycle:
+            if self.world_time - req_cycle > 5:
+                self.relationships["neighbor"]["trust"] = max(0.1, self.relationships["neighbor"].get("trust", 0.5) - 0.05)
+                self.neighbor_state["request_cycle"] = self.world_time
+                self.mood_intensity = min(1.0, self.mood_intensity + 0.05)
 
         # random events for variety (power flickers, drafts, etc.)
         if self.random.random() < 0.15:
@@ -370,6 +388,9 @@ class TextWorld:
             "inventory": list(self.agent_inventory),
             "goal": self.active_goal["name"] if self.active_goal else None,
             "goal_step": self._current_goal_step(),
+            "goal_progress": list(self.current_goal_steps_done),
+            "goal_history": list(self.goal_history[-5:]),
+            "relationships": {k: dict(v) for k, v in self.relationships.items()},
         }
 
     # ------------------------------------------------------------------
@@ -397,7 +418,7 @@ class TextWorld:
         if not room:
             return {"success": False, "reason": "The surroundings feel undefined."}
 
-        if target not in room and verb not in {"drop", "use", "inventory", "wait"}:
+        if target not in room and verb not in {"drop", "use", "inventory", "wait", "help"}:
             return {"success": False, "reason": f"I don't see a {target} here."}
 
         obj = room.get(target)
@@ -425,6 +446,7 @@ class TextWorld:
             "cook": self._act_cook,
             "sit": self._act_sit,
             "play": self._act_play,
+            "help": self._act_help,
         }
 
         if verb not in handler_map:
@@ -589,6 +611,15 @@ class TextWorld:
             return {"success": True, "reason": "Tidying up feels satisfying."}
         return {"success": False, "reason": f"Cleaning the {target} has no effect."}
 
+    def _act_help(self, target, obj, props, state):
+        if target == "neighbor" and self.neighbor_state.get("awaiting_help"):
+            self.neighbor_state["awaiting_help"] = False
+            self.neighbor_state["request_cycle"] = None
+            self.relationships["neighbor"]["trust"] = min(1.0, self.relationships["neighbor"].get("trust", 0.5) + 0.1)
+            self.mood_intensity = max(0.0, self.mood_intensity - 0.05)
+            return {"success": True, "reason": "I helped the neighbor with the package."}
+        return {"success": False, "reason": "I don't see anyone who needs help."}
+
     def _act_repair(self, target, obj, props, state):
         if "repairable" in props:
             toolkit = "toolkit" in self.agent_inventory
@@ -661,9 +692,15 @@ class TextWorld:
             return
         if step["action"] == verb and step.get("target") == target:
             self.goal_progress_index += 1
+            self.current_goal_steps_done.append(step)
+            self.goal_history.append({"goal": self.active_goal["name"], "step": step, "cycle": self.world_time})
             if self.goal_progress_index >= len(self.active_goal["steps"]):
                 # complete
                 self.mood_intensity = max(0.0, self.mood_intensity - 0.1)
                 self.cleanliness = max(0.0, self.cleanliness - 0.02)
+                if self.active_goal["name"] == "Assist the neighbor":
+                    self.relationships["neighbor"]["trust"] = min(1.0, self.relationships["neighbor"].get("trust", 0.5) + 0.15)
+                    self.neighbor_state["awaiting_help"] = False
+                    self.neighbor_state["request_cycle"] = None
                 self.active_goal = None
                 self._ensure_goal()

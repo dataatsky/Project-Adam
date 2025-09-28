@@ -57,5 +57,30 @@ def test_action_rejects_missing_objects():
     assert "don't see" in res["reason"] or "can't open" in res["reason"]
 
 
+def test_goal_progress_tracks_steps():
+    world = TextWorld()
+    world.active_goal = {
+        "name": "Assist the neighbor",
+        "steps": [{"room": "living_room", "action": "help", "target": "neighbor"}],
+    }
+    world.goal_progress_index = 0
+    world.current_goal_steps_done = []
+    world.neighbor_state.update({"awaiting_help": True, "request_cycle": world.world_time})
+
+    world.process_action({"verb": "help", "target": "neighbor"})
+    state = world.get_world_state()
+    assert state["goal_history"]  # records completion
+
+
+def test_help_neighbor_increases_trust():
+    world = TextWorld()
+    world.neighbor_state.update({"awaiting_help": True, "request_cycle": world.world_time})
+    before = world.relationships["neighbor"]["trust"]
+    res = world.process_action({"verb": "help", "target": "neighbor"})
+    assert res["success"] is True
+    after = world.relationships["neighbor"]["trust"]
+    assert after > before
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

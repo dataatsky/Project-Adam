@@ -321,6 +321,11 @@ Adam lives in a **virtual apartment** simulated by `TextWorld`:
 
   * `hunger` rises over time → lowered by eating
   * `mood_intensity` rises with stress → lowered by calming actions (sleep, read, answer phone)
+  * Relationships (neighbor trust) drift based on your responses; ignoring requests raises stress
+
+* **Goals & Reflection**:
+  * Multi-step household goals: brew tea, tend plant, journal, assist the neighbor
+  * Adam keeps a rolling diary every few cycles; entries land in long-term memory and nudge his mood
 
 ---
 
