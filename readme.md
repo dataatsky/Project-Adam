@@ -447,6 +447,7 @@ Analyze CSV logs in Jupyter/Colab:
 * **KPIs**: frustration, conflict, novelty, loop score, goal progress
 * **Event chains**: visualize causal lines (trigger → impulse → action → result)
 * **Memory recall**: inspect which past events influenced current choices
+* **Behavior metrics**: rolling success rate, wait ratio, average impulse urgency, mood deltas
 
 ### Notebook Workflow (adam_log_analysis.ipynb)
 
@@ -475,25 +476,6 @@ If you edit `analysis_utils.py`, reload it in-place:
 import importlib, analysis_utils as au
 au = importlib.reload(au)
 ```
-
----
-
-### Interactive Dashboard (Streamlit)
-
-For a shareable web view of Adam’s runs, launch the Streamlit app:
-
-```bash
-streamlit run dashboards/streamlit_app.py
-```
-
-Use the sidebar to point at a CSV log (defaults to `LOG_FILE`) and explore:
-
-* Mood and loop-score trends across cycles.
-* Loop alerts filtered by a configurable threshold.
-* Goal progression timeline showing which tasks Adam pursued/completed.
-* Object engagement heatmap (verbs × targets) highlighting interaction patterns.
-
-The dashboard is read-only and loads historical logs; the live Psyche Monitor GUI remains the cockpit for real-time runs.
 
 ---
 

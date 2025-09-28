@@ -4,6 +4,7 @@ import ast
 from collections import Counter
 from typing import Optional, Iterable, Dict, Any
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -129,6 +130,47 @@ def compute_mismatch_rate(df: pd.DataFrame) -> pd.DataFrame:
             return None
 
     df["mismatch_rate"] = df.apply(_mismatch, axis=1)
+    return df
+
+
+def compute_behavior_metrics(df: pd.DataFrame, window: int = 5) -> pd.DataFrame:
+    """Derive additional behavior metrics used by dashboards/notebooks."""
+
+    if df.empty:
+        return df
+
+    if "action_result_parsed" in df.columns:
+        success_series = df["action_result_parsed"].apply(
+            lambda r: bool((r or {}).get("success")) if isinstance(r, dict) else False
+        ).astype(float)
+    else:
+        success_series = pd.Series(0.0, index=df.index)
+
+    df["action_success"] = success_series
+    df["success_rate"] = success_series.rolling(window, min_periods=1).mean()
+
+    if "chosen_verb" in df.columns:
+        waits = (df["chosen_verb"].fillna("") == "wait").astype(float)
+    else:
+        waits = pd.Series(0.0, index=df.index)
+    df["wait_ratio"] = waits.rolling(window, min_periods=1).mean()
+
+    if "impulses_parsed" in df.columns:
+        def _avg_urgency(imps):
+            if not isinstance(imps, list) or not imps:
+                return np.nan
+            vals = [float((imp or {}).get("urgency", 0.0)) for imp in imps if isinstance(imp, dict)]
+            return float(np.mean(vals)) if vals else np.nan
+
+        df["avg_impulse_urgency"] = df["impulses_parsed"].apply(_avg_urgency)
+    else:
+        df["avg_impulse_urgency"] = np.nan
+
+    if "mood_intensity" in df.columns:
+        df["mood_delta"] = df["mood_intensity"].diff().fillna(0.0)
+    else:
+        df["mood_delta"] = 0.0
+
     return df
 
 
@@ -319,11 +361,18 @@ def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
         "imagined_outcomes", "simulated_outcomes", "emotional_delta", "kpis", "snapshot",
         "current_goal", "goal_step",
     ]
-    df = _read_log_csv(csv_path, headers)
+    try:
+        df = _read_log_csv(csv_path, headers)
+    except Exception:
+        legacy_headers = headers[:-2]
+        df = _read_log_csv(csv_path, legacy_headers)
+        df["current_goal"] = ""
+        df["goal_step"] = ""
     df = clean_dataframe(df)
     df = _flatten_kpis(df)
     df = _expand_snapshot(df)
     df = compute_mismatch_rate(df)
+    df = compute_behavior_metrics(df)
     df = _normalize_types(df)
 
     # Normalize mood labels if obvious variants exist

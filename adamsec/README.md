@@ -226,8 +226,7 @@ Add similar unit tests when introducing new attacks to guarantee they emit the e
 
 - Additional attack surfaces (memory poisoning, scheduler DoS, world-rule tampering).
 - Guard enhancements (hash-chain integrity for memory entries, action rate limiting).
-- Streamlit/Kibana dashboards showcasing detection metrics (MTTD, containment rate).
+- Kibana dashboards showcasing detection metrics (MTTD, containment rate).
 - Scenario authoring toolkit for combining playbooks with scripted responses.
 
 Contributions are welcome—document new attacks and playbooks in this README so teams understand the available adversary simulations.
-
