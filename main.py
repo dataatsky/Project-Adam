@@ -22,11 +22,10 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--cycles", type=int, default=0, help="Headless: stop after N cycles (0 = run forever)")
     args = parser.parse_args(argv)
     log_file = config.LOG_FILE
-    if not os.path.exists(log_file):
-        with open(log_file, mode="w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=LOG_HEADERS)
-            writer.writeheader()
-        print(f"Created log file: {log_file}")
+    with open(log_file, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=LOG_HEADERS)
+        writer.writeheader()
+    print(f"Created log file: {log_file}")
 
     # Initialize memory store and foundational memories
     memory_store = MemoryStore(

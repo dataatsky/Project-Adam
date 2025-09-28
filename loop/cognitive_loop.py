@@ -62,6 +62,8 @@ class CognitiveLoop:
         try:
             with open(self.log_filename, mode="a", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=self.log_headers)
+                if f.tell() == 0:
+                    writer.writeheader()
                 writer.writerow(cycle_data)
         except Exception as e:
             print(f"CSV write error: {e}")
