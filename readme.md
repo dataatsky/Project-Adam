@@ -15,16 +15,8 @@ This README provides everything you need to **understand, install, run, and anal
 
 2. **Start Adam’s Mind**:
 
-   Preferred entrypoint:
-
    ```bash
    python main.py
-   ```
-
-   Legacy script (still supported):
-
-   ```bash
-   python cognitive_loop_gui.py
    ```
 
    Headless mode (no GUI, loop + API only):
@@ -70,7 +62,7 @@ This project was born as an effort to represent the episode Hotel Reverie from B
 | **Text World**           | `text_world.py`         | Adam’s environment: a text-based apartment with rooms, objects, and events.      |
 | **Psyche-LLM**           | `psyche_ollama.py`      | Adam’s subconscious: generates impulses, imagination, and reflection via Ollama. |
 | **Memory**               | Pinecone DB             | Stores Adam’s memories as embeddings for long-term recall.                       |
-| **Cognitive Loop + GUI** | `cognitive_loop_gui.py` | Adam’s conscious mind: runs the OODA cycle, integrates memory, manages the GUI.  |
+| **Cognitive Loop**       | `loop/cognitive_loop.py` | Adam’s conscious mind: runs the OODA cycle, integrates memory, manages the GUI via `main.py`. |
 
 ---
 
@@ -80,7 +72,7 @@ Adam’s cognition flows between world, psyche, memory, and actions:
 
 ```mermaid
 flowchart TD
-    A[Text World<br/>`text_world.py`] -->|World State| B[Cognitive Loop<br/>`cognitive_loop_gui.py`]
+    A[Text World<br/>`text_world.py`] -->|World State| B[Cognitive Loop<br/>`loop/cognitive_loop.py`]
     B -->|Prompts| C[Psyche-LLM<br/>`psyche_ollama.py`]
     C -->|Impulses / Reflection| B
     B -->|Embeddings| D[Pinecone DB<br/>Memory]
@@ -185,9 +177,6 @@ python main.py
 
 # Or headless
 python main.py --headless
-
-# Or legacy script
-# python cognitive_loop_gui.py
 ```
 
 ---
@@ -337,7 +326,7 @@ Adam lives in a **virtual apartment** simulated by `TextWorld`:
 
 ## 8. GUI Overview
 
-Running `cognitive_loop_gui.py` opens the **Psyche Monitor**:
+Running `python main.py` (without `--headless`) opens the **Psyche Monitor**:
 
 * **Vitals Panel**
 
