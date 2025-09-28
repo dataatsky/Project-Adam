@@ -1,4 +1,5 @@
 from flask import Flask, jsonify
+import logging
 
 
 def create_app(get_brain):
@@ -7,15 +8,25 @@ def create_app(get_brain):
     @app.get("/get_state")
     def get_state():
         brain = get_brain()
-        if brain:
-            try:
-                return jsonify({
-                    "location": brain.current_world_state.get("agent_location", "unknown"),
-                    "mood": brain.agent_status['emotional_state']['mood']
-                })
-            except Exception:
-                pass
-        return jsonify({"error": "Cognitive loop not running"}), 500
+        if not brain:
+            return jsonify({"error": "Cognitive loop not running"}), 500
+        try:
+            recent_memories = getattr(brain, "recent_memories", []) or []
+            recent_impulses = getattr(brain, "last_impulses", []) or []
+            state = {
+                "cycle": getattr(brain, "cycle_counter", 0),
+                "location": brain.current_world_state.get("agent_location", "unknown") if getattr(brain, "current_world_state", None) else "unknown",
+                "mood": brain.agent_status['emotional_state']['mood'],
+                "hunger": brain.agent_status['needs']['hunger'],
+                "recent_impulses": recent_impulses[:3],
+                "recent_memories": recent_memories[-3:],
+                "current_goal": getattr(brain, "active_goal", {}).get("name") if hasattr(brain, "active_goal") else None,
+                "kpis": brain.insight.compute_kpis() if getattr(brain, "insight", None) else {},
+            }
+            return jsonify(state)
+        except Exception as exc:
+            logging.getLogger(__name__).warning("State serialization failed: %s", exc, exc_info=True)
+            return jsonify({"error": "Unable to serialize state"}), 500
 
     return app
     
@@ -26,6 +37,7 @@ def _safe_brain_state(brain):
             "mood": brain.agent_status['emotional_state']['mood'],
             "hunger": brain.agent_status['needs']['hunger'],
             "kpis": brain.insight.compute_kpis() if getattr(brain, "insight", None) else {},
+            "current_goal": getattr(brain, "active_goal", {}).get("name") if hasattr(brain, "active_goal") else None,
         }
         return state
     except Exception:

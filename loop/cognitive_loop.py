@@ -51,6 +51,7 @@ class CognitiveLoop:
             self.cycle_sleep = 5.0
         self.security = None
         self.recent_success_actions: list[tuple[str | None, str | None]] = []
+        self.last_impulses: list[dict] = []
 
     def attach_security(self, security):
         self.security = security
@@ -141,11 +142,17 @@ class CognitiveLoop:
             self.security.after_psyche("generate_impulse", payload, impulses)
         if impulses:
             impulses = self._dampen_repeated_impulses(impulses)
+            try:
+                self.last_impulses = impulses.get("impulses", []) or []
+            except Exception:
+                self.last_impulses = []
             self.ui and self.ui.set_subconscious(
                 impulses.get("emotional_shift", {}),
                 impulses.get("impulses", []),
                 self.last_resonant_memories,
             )
+            return impulses
+        self.last_impulses = []
         return impulses
 
     def imagine_and_reflect(self, initial_impulses, world: TextWorld):
