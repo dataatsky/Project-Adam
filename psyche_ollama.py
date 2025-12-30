@@ -1,16 +1,15 @@
 # psyche_llm_ollama.py
 # ---------------------
-# Updated with a new /imagine endpoint for the Imagination Engine.
+# Refactored to use `instructor` for strict structured output enforcement.
 
-from flask import Flask, request, jsonify, Response
-import ollama
-import json
+from flask import Flask, request, jsonify, Response, render_template
+import instructor
+from openai import OpenAI
 import logging
 import os
 import time
 from dotenv import load_dotenv
-from collections import Counter
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 
 from pydantic import BaseModel, Field, ValidationError
 from prometheus_client import Counter as PmCounter, Histogram, generate_latest, CONTENT_TYPE_LATEST
@@ -20,7 +19,7 @@ app = Flask(__name__)
 
 # --- CONFIGURATION ---
 load_dotenv(".env")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL")  # Change as needed
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3") 
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -35,6 +34,7 @@ OLLAMA_CALLS = PmCounter("psyche_ollama_calls_total", "Ollama chat calls", ["end
 class Action(BaseModel):
     verb: str
     target: Optional[str] = None
+    instrument: Optional[str] = None
 
 class EmotionalShift(BaseModel):
     mood: str = Field(default="neutral")
@@ -44,6 +44,7 @@ class EmotionalShift(BaseModel):
 class Impulse(BaseModel):
     verb: str
     target: Optional[str] = None
+    instrument: Optional[str] = None
     drive: Optional[str] = None
     urgency: float = 0.0
 
@@ -51,6 +52,7 @@ class GenerateImpulseRequest(BaseModel):
     current_state: Dict[str, Any]
     world_state: Dict[str, Any]
     resonant_memories: List[str] = []
+    mastered_skills: List[str] = []
 
 class GenerateImpulseResponse(BaseModel):
     emotional_shift: EmotionalShift
@@ -62,6 +64,12 @@ class ImagineRequest(BaseModel):
 class ImagineResponse(BaseModel):
     outcome: str
 
+class ImagineBatchRequest(BaseModel):
+    actions: List[Action]
+
+class ImagineBatchResponse(BaseModel):
+    outcomes: List[str]
+
 class ReflectRequest(BaseModel):
     current_state: Dict[str, Any]
     hypothetical_outcomes: List[Dict[str, Any]]
@@ -70,139 +78,62 @@ class ReflectRequest(BaseModel):
 class ReflectResponse(BaseModel):
     final_action: Action
     reasoning: str
+    thoughts_on_others: Optional[str] = None
+    new_goal: Optional[str] = None
+    new_goal_plan: Optional[List[str]] = None # List of sub-steps
 
-# --- PROMPTS ---
-SUBCONSCIOUS_PROMPT = """
-You are the subconscious of an AI agent named Adam. Respond ONLY with JSON.
+class ConsolidateRequest(BaseModel):
+    recent_memories: List[str]
 
-The JSON must have two keys:
-- "emotional_shift": {"mood": str, "level_delta": float, "reason": str}
-- "impulses": [ {"verb": str, "target": str, "drive": str, "urgency": float} ]
+class ConsolidateResponse(BaseModel):
+    insight: str
 
-VERB TOOLBOX:
-- "wait", "go", "examine", "open", "close", "read", "eat", "answer", "ignore", "turn_on", "turn_off", "investigate", "sleep"
-"""
+# --- INSTRUCTOR CLIENT ---
+# We patch the OpenAI client to use Instructor, pointing it to local Ollama
+try:
+    client = instructor.from_openai(
+        OpenAI(
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+            api_key="ollama",  # required but unused
+        ),
+        mode=instructor.Mode.JSON,
+    )
+except Exception as e:
+    log.error(f"Failed to initialize Instructor client: {e}")
+    client = None
 
-IMAGINATION_PROMPT = """
-You are the imagination of Adam. Predict the most likely outcome of a hypothetical action.
-Respond with JSON: {"outcome": "..."}.
-"""
-
-CONSCIOUS_MIND_PROMPT = """
-You are the conscious mind of Adam. Reflect logically and choose ONE final action.
-
-Respond ONLY with JSON:
-- "final_action": {"verb": str, "target": str}
-- "reasoning": str
-
-If a plan has repeatedly failed in recent memories, avoid repeating it.
-"""
-
-
-def safe_json_loads(raw):
-    """Tolerant JSON loader: extract first {...} if raw contains noise.
-    Fixed to avoid recursion and to return a dict on failure."""
-    if raw is None:
-        return {}
-    if isinstance(raw, (dict, list)):
-        return raw
-    try:
-        return json.loads(raw)
-    except Exception:
-        # Try extracting object
-        try:
-            start = raw.index("{"); end = raw.rindex("}") + 1
-            return json.loads(raw[start:end])
-        except Exception:
-            # Try extracting array
-            try:
-                start = raw.index("["); end = raw.rindex("]") + 1
-                return json.loads(raw[start:end])
-            except Exception:
-                return {}
-        
 # --- HELPERS ---
-        
-def normalize_impulses(data: dict):
+
+def normalize_impulses(data: GenerateImpulseResponse) -> GenerateImpulseResponse:
     """Normalize verbs to match TextWorld's physics."""
-    impulses = data.get("impulses", [])
-    for imp in impulses:
-        v = imp.get("verb")
-        if v == "investigate":
-            imp["verb"] = "examine"
-        elif v == "ignore":
-            imp["verb"] = "wait"
-        elif v in ("turn_on", "turn_off"):
-            imp["verb"] = "toggle"
-    data["impulses"] = impulses
+    for imp in data.impulses:
+        if imp.verb == "investigate":
+            imp.verb = "examine"
+        elif imp.verb == "ignore":
+            imp.verb = "wait"
+        elif imp.verb in ("turn_on", "turn_off"):
+            imp.verb = "toggle"
     return data
 
-def generate_user_prompt(data):
-    """Builds the user prompt string for the subconscious."""
-    world_state = data.get('world_state', {}) or {}
-    current_state = data.get('current_state', {}) or {}
-    resonant_memories = data.get('resonant_memories', []) or []
-
-    prompt = "## Current Situation:\n"
-    prompt += f"- Adam's current goal is: {str(current_state.get('goal', 'None'))}\n"
-    prompt += f"- Adam's current hunger level is {float(current_state.get('needs', {}).get('hunger', 0)):.2f} (0=satiated, 1=starving).\n"
-    prompt += f"- Adam is in the: {str(world_state.get('agent_location', 'unknown'))}\n"
-    prompt += f"- PERCEIVABLE OBJECTS (Nouns): {str(world_state.get('perceivable_objects', []))}\n"
-    prompt += f"- AVAILABLE EXITS (for 'go' verb): {str(world_state.get('available_exits', []))}\n"
-    prompt += f"- Current sensory events are: {str(world_state.get('sensory_events', []))}\n"
-
-    if resonant_memories:
-        prompt += "\n## Resonant Memories (These past events feel relevant):\n"
-        for mem in resonant_memories:
-            prompt += f"- {str(mem)}\n"
-
-    prompt += "\nBased on this situation and memories, generate the JSON response for Adam's subconscious."
-    return prompt
-
-def generate_reflection_prompt(data):
-    """Builds the user prompt string for the conscious mind."""
-    current_state = data.get('current_state', {}) or {}
-    hypothetical_outcomes = data.get('hypothetical_outcomes', []) or []
-    recent_memories = data.get('recent_memories', []) or []
-
-    prompt = "## Reflection Task:\n"
-    prompt += f"- Emotional state: {str(current_state.get('emotional_state', {}).get('mood', 'neutral'))}\n"
-    prompt += f"- Goal: {str(current_state.get('goal', 'none'))}\n"
-
-    if recent_memories:
-        prompt += "\n## My Recent Memories (Last 5 actions):\n"
-        for mem in recent_memories:
-            prompt += f"- {str(mem)}\n"
-
-        # 🔍 Loop-breaking hint: count repeated failed actions
-        failed_actions = []
-        for mem in recent_memories:
-            if "failed" in str(mem).lower():
-                # crude extraction: look for "to VERB the TARGET"
-                tokens = str(mem).split()
-                if "to" in tokens:
+def get_failed_actions_summary(recent_memories):
+    """Analyze recent memories to find repeated failures."""
+    from collections import Counter
+    failed_actions = []
+    for mem in recent_memories:
+        if "failed" in str(mem).lower():
+            tokens = str(mem).split()
+            if "to" in tokens:
+                try:
                     idx = tokens.index("to")
                     action = " ".join(tokens[idx+1:idx+3])  # e.g. "open door"
                     failed_actions.append(action)
-        if failed_actions:
-            counts = Counter(failed_actions)
-            prompt += "\n## Important Observations:\n"
-            for act, n in counts.items():
-                if n >= 2:
-                    prompt += f"- Note: The action '{act}' has failed {n} times recently. Consider trying something different.\n"
-
-    prompt += "\n## Hypothetical Plans:\n"
-    for outcome in hypothetical_outcomes:
-        act = outcome.get("action", {}) or {}
-        prompt += f"- Action: {str(act)}\n"
-        prompt += f"  - Imagined: '{str(outcome.get('imagined', ''))}'\n"
-        prompt += f"  - Simulated: '{str(outcome.get('simulated', ''))}'\n"
-
-    prompt += "\nNow return my final decision in JSON."
-    return prompt
+                except IndexError:
+                    pass
+    if failed_actions:
+        return dict(Counter(failed_actions))
+    return {}
 
 # --- ENDPOINTS ---
-
 
 @app.route('/generate_impulse', methods=['POST'])
 def generate_impulse():
@@ -214,46 +145,36 @@ def generate_impulse():
         except ValidationError as ve:
             REQS.labels(endpoint, "400").inc()
             return jsonify({"error": "invalid payload", "details": ve.errors()}), 400
-        prompt = generate_user_prompt(req.model_dump())
-        log.info("subconscious_prompt", extra={"endpoint": endpoint})
+        
+        data = req.model_dump()
+        prompt = render_template('subconscious.j2', **data)
+        log.info("subconscious_prompt_generated", extra={"endpoint": endpoint})
 
-        retries = int(os.getenv("OLLAMA_RETRIES", "2"))
-        delay = float(os.getenv("OLLAMA_BACKOFF", "0.5"))
-        last_exc = None
-        for attempt in range(retries + 1):
-            try:
-                response = ollama.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[
-                        {"role": "system", "content": SUBCONSCIOUS_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    options={"temperature": 0.8},
-                    format="json",
-                )
-                OLLAMA_CALLS.labels(endpoint, "ok").inc()
-                break
-            except Exception as e:
-                last_exc = e
-                OLLAMA_CALLS.labels(endpoint, "err").inc()
-                time.sleep(delay)
-                delay *= 2
-        if last_exc:
-            raise last_exc
+        try:
+            resp = client.chat.completions.create(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=GenerateImpulseResponse,
+                max_retries=int(os.getenv("OLLAMA_RETRIES", "2")),
+            )
+            OLLAMA_CALLS.labels(endpoint, "ok").inc()
+        except Exception as e:
+            log.error(f"Attributes validation failed: {e}")
+            OLLAMA_CALLS.labels(endpoint, "err").inc()
+            raise e
 
-        llm_json = safe_json_loads(response["message"]["content"]) or {}
-        if "emotional_shift" not in llm_json:
-            llm_json["emotional_shift"] = {"mood": "neutral", "level_delta": 0.0, "reason": "fallback"}
-        if "impulses" not in llm_json or llm_json.get("impulses") is None:
-            llm_json["impulses"] = []
-        out = GenerateImpulseResponse.model_validate(normalize_impulses(llm_json)).model_dump()
+        # Normalize and dump
+        out = normalize_impulses(resp).model_dump()
+        
         REQS.labels(endpoint, "200").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify(out)
+
     except Exception as e:
         log.warning(f"/{endpoint} failed: {e}")
         REQS.labels(endpoint, "500").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
+        # Fallback response complying with schema
         return jsonify({
             "emotional_shift": {"mood":"neutral","level_delta":0,"reason":"fallback"},
             "impulses":[{"verb":"wait","target":None,"drive":"safety","urgency":0.1}]
@@ -269,38 +190,30 @@ def imagine():
         except ValidationError as ve:
             REQS.labels(endpoint, "400").inc()
             return jsonify({"error": "invalid payload", "details": ve.errors()}), 400
+        
         verb = req.action.verb
         tgt = req.action.target
         act_str = f"I will {verb} (do nothing)." if not tgt or tgt == "null" else f"I will {verb} the {tgt}."
-        user_prompt = f"Hypothetical action: {act_str} What is the most likely outcome?"
-        log.info("imagination_prompt", extra={"endpoint": endpoint})
+        
+        prompt = render_template('imagination.j2', action_description=act_str)
+        log.info("imagination_prompt_generated", extra={"endpoint": endpoint})
 
-        retries = int(os.getenv("OLLAMA_RETRIES", "2"))
-        delay = float(os.getenv("OLLAMA_BACKOFF", "0.5"))
-        last_exc = None
-        for attempt in range(retries + 1):
-            try:
-                response = ollama.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[
-                        {"role": "system", "content": IMAGINATION_PROMPT},
-                        {"role": "user", "content": str(user_prompt)},
-                    ],
-                    options={"temperature": 0.7},
-                    format="json",
-                )
-                OLLAMA_CALLS.labels(endpoint, "ok").inc()
-                break
-            except Exception as e:
-                last_exc = e
-                OLLAMA_CALLS.labels(endpoint, "err").inc()
-                time.sleep(delay)
-                delay *= 2
-        if last_exc:
-            raise last_exc
+        try:
+            resp = client.chat.completions.create(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ImagineResponse,
+                max_retries=int(os.getenv("OLLAMA_RETRIES", "2")),
+            )
+            OLLAMA_CALLS.labels(endpoint, "ok").inc()
+        except Exception as e:
+            log.error(f"Attributes validation failed: {e}")
+            OLLAMA_CALLS.labels(endpoint, "err").inc()
+            raise e
 
-        llm_json = safe_json_loads(response["message"]["content"])
-        out = ImagineResponse.model_validate(llm_json or {"outcome": "uncertain"}).model_dump()
+        # Since model defines output structure, just dump
+        out = resp.model_dump()
+
         REQS.labels(endpoint, "200").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify(out)
@@ -309,6 +222,49 @@ def imagine():
         REQS.labels(endpoint, "500").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify({"outcome": "uncertain"}), 200
+
+@app.route('/imagine_batch', methods=['POST'])
+def imagine_batch():
+    t0 = time.time()
+    endpoint = "imagine_batch"
+    try:
+        try:
+            req = ImagineBatchRequest.model_validate(request.get_json(force=True) or {})
+        except ValidationError as ve:
+            REQS.labels(endpoint, "400").inc()
+            return jsonify({"error": "invalid payload", "details": ve.errors()}), 400
+        
+        prompt = render_template('imagination_batch.j2', actions=req.actions)
+        log.info(f"imagination_batch_prompt_generated n={len(req.actions)}", extra={"endpoint": endpoint})
+
+        try:
+            resp = client.chat.completions.create(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ImagineBatchResponse,
+                max_retries=int(os.getenv("OLLAMA_RETRIES", "2")),
+            )
+            OLLAMA_CALLS.labels(endpoint, "ok").inc()
+        except Exception as e:
+            log.error(f"Attributes validation failed: {e}")
+            OLLAMA_CALLS.labels(endpoint, "err").inc()
+            raise e
+        
+        # Ensure output length matches input length (pad with failures if needed)
+        outcomes = resp.outcomes
+        if len(outcomes) < len(req.actions):
+            outcomes.extend(["(Imagination uncertain)"] * (len(req.actions) - len(outcomes)))
+        
+        out = ImagineBatchResponse(outcomes=outcomes).model_dump()
+
+        REQS.labels(endpoint, "200").inc()
+        LAT.labels(endpoint).observe(time.time() - t0)
+        return jsonify(out)
+    except Exception as e:
+        log.warning(f"/{endpoint} failed: {e}")
+        REQS.labels(endpoint, "500").inc()
+        LAT.labels(endpoint).observe(time.time() - t0)
+        return jsonify({"outcomes": ["(Frontend Error)"] * len(req.actions)}), 200
 
 @app.route('/reflect', methods=['POST'])
 def reflect():
@@ -320,39 +276,32 @@ def reflect():
         except ValidationError as ve:
             REQS.labels(endpoint, "400").inc()
             return jsonify({"error": "invalid payload", "details": ve.errors()}), 400
-        prompt = generate_reflection_prompt(req.model_dump())
-        log.info("reflection_prompt", extra={"endpoint": endpoint})
+        
+        data = req.model_dump()
+        failed_summary = get_failed_actions_summary(data.get('recent_memories', []))
+        
+        prompt = render_template('conscious_mind.j2', 
+                               current_state=data.get('current_state'),
+                               recent_memories=data.get('recent_memories'),
+                               hypothetical_outcomes=data.get('hypothetical_outcomes'),
+                               failed_actions_summary=failed_summary)
+        
+        log.info("reflection_prompt_generated", extra={"endpoint": endpoint})
 
-        retries = int(os.getenv("OLLAMA_RETRIES", "2"))
-        delay = float(os.getenv("OLLAMA_BACKOFF", "0.5"))
-        last_exc = None
-        for attempt in range(retries + 1):
-            try:
-                response = ollama.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[
-                        {"role": "system", "content": CONSCIOUS_MIND_PROMPT},
-                        {"role": "user", "content": str(prompt)},
-                    ],
-                    options={"temperature": 0.5},
-                    format="json",
-                )
-                OLLAMA_CALLS.labels(endpoint, "ok").inc()
-                break
-            except Exception as e:
-                last_exc = e
-                OLLAMA_CALLS.labels(endpoint, "err").inc()
-                time.sleep(delay)
-                delay *= 2
-        if last_exc:
-            raise last_exc
+        try:
+            resp = client.chat.completions.create(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ReflectResponse,
+                max_retries=int(os.getenv("OLLAMA_RETRIES", "2")),
+            )
+            OLLAMA_CALLS.labels(endpoint, "ok").inc()
+        except Exception as e:
+            log.error(f"Attributes validation failed: {e}")
+            OLLAMA_CALLS.labels(endpoint, "err").inc()
+            raise e
 
-        llm_json = safe_json_loads(response["message"]["content"]) or {}
-        if "final_action" not in llm_json:
-            llm_json["final_action"] = {"verb": "wait", "target": None}
-        if "reasoning" not in llm_json:
-            llm_json["reasoning"] = "fallback"
-        out = ReflectResponse.model_validate(llm_json).model_dump()
+        out = resp.model_dump()
         REQS.labels(endpoint, "200").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify(out)
@@ -361,9 +310,45 @@ def reflect():
         REQS.labels(endpoint, "500").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify({
-            "final_action": {"verb": "wait", "target": None},
-            "reasoning": "fallback",
+            "new_goal": None,
         }), 200
+
+@app.route('/consolidate', methods=['POST'])
+def consolidate():
+    t0 = time.time()
+    endpoint = "consolidate"
+    try:
+        try:
+            req = ConsolidateRequest.model_validate(request.get_json(force=True) or {})
+        except ValidationError as ve:
+            REQS.labels(endpoint, "400").inc()
+            return jsonify({"error": "invalid payload", "details": ve.errors()}), 400
+        
+        prompt = render_template('consolidation.j2', recent_memories=req.recent_memories)
+        log.info("consolidation_prompt_generated", extra={"endpoint": endpoint})
+
+        try:
+            resp = client.chat.completions.create(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ConsolidateResponse,
+                max_retries=int(os.getenv("OLLAMA_RETRIES", "2")),
+            )
+            OLLAMA_CALLS.labels(endpoint, "ok").inc()
+        except Exception as e:
+            log.error(f"Attributes validation failed: {e}")
+            OLLAMA_CALLS.labels(endpoint, "err").inc()
+            raise e
+
+        out = resp.model_dump()
+        REQS.labels(endpoint, "200").inc()
+        LAT.labels(endpoint).observe(time.time() - t0)
+        return jsonify(out)
+    except Exception as e:
+        log.warning(f"/{endpoint} failed: {e}")
+        REQS.labels(endpoint, "500").inc()
+        LAT.labels(endpoint).observe(time.time() - t0)
+        return jsonify({"insight": "I slept peacefully, my mind blank."}), 200
 
 
 @app.get('/metrics')
@@ -372,5 +357,5 @@ def metrics():
 
 
 if __name__ == '__main__':
-    log.info(f"Psyche-LLM (Ollama) running on model: {OLLAMA_MODEL}")
-    app.run(port=5000)
+    log.info(f"Psyche-LLM (Instructor+Ollama) running on model: {OLLAMA_MODEL}")
+    app.run(port=5001)

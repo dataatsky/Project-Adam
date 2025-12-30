@@ -7,7 +7,7 @@ import json
 load_dotenv(".env")
 
 # LLM / Psyche service
-PSYCHE_LLM_API_URL = os.getenv("PSYCHE_LLM_API_URL", "http://127.0.0.1:5000/")
+PSYCHE_LLM_API_URL = os.getenv("PSYCHE_LLM_API_URL", "http://127.0.0.1:5001/")
 
 # Pinecone / embeddings
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE")

@@ -1,0 +1,7 @@
+You are the imagination of Adam. Predict the most likely outcome for EACH of the following hypothetical actions.
+Respond with a JSON object containing a list of outcomes strings in the exact same order.
+
+Actions to simulate:
+{% for act in actions %}
+{{ loop.index }}. I will {{ act.verb }}{% if act.target %} the {{ act.target }}{% else %} (do nothing){% endif %}.
+{% endfor %}

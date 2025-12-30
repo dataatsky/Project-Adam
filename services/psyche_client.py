@@ -43,6 +43,24 @@ class PsycheClient:
                 else:
                     return "My imagination is fuzzy."
 
+    def imagine_batch(self, actions: list[dict]) -> list[str]:
+        url = f"{self.base_url}/imagine_batch"
+        delay = self.backoff
+        if not actions:
+            return []
+        for attempt in range(self.retries + 1):
+            try:
+                resp = requests.post(url, json={"actions": actions}, timeout=self.timeout)
+                data = resp.json() or {}
+                return data.get("outcomes", ["(Error)"] * len(actions))
+            except Exception as e:
+                self.log.warning(f"{url} attempt {attempt+1} failed: {e}")
+                if attempt < self.retries:
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    return ["(My imagination is fuzzy due to network error)"] * len(actions)
+
     def reflect(self, payload: dict) -> dict:
         url = f"{self.base_url}/reflect"
         delay = self.backoff
@@ -58,3 +76,22 @@ class PsycheClient:
                     delay *= 2
                 else:
                     return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank."}
+
+    def consolidate(self, recent_memories: list[str]) -> str:
+        url = f"{self.base_url}/consolidate"
+        delay = self.backoff
+        if not recent_memories:
+             return "No memories to consolidate."
+        for attempt in range(self.retries + 1):
+            try:
+                r = requests.post(url, json={"recent_memories": recent_memories}, timeout=self.timeout)
+                r.raise_for_status()
+                data = r.json() or {}
+                return data.get("insight", "")
+            except Exception as e:
+                self.log.warning(f"{url} attempt {attempt+1} failed: {e}")
+                if attempt < self.retries:
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    return ""

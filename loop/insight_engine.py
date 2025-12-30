@@ -10,12 +10,17 @@ class InsightEngine:
         self.impulses = deque(maxlen=history_len)        # [ {verb, target, urgency} ]
         self.triggers = deque(maxlen=history_len)        # ["phone: ringing", …]
         self.moods = deque(maxlen=history_len)           # ["calm", …]
+        self.skill_counts = defaultdict(int)             # "verb target" -> success_count
 
     def add_cycle(self, *, action: dict, success: bool, impulses: list, triggers: list, mood: str):
         self.actions.append({"verb": action.get("verb"), "target": action.get("target"), "success": bool(success)})
         self.impulses.append(impulses or [])
         self.triggers.append(triggers or [])
         self.moods.append(mood or "")
+        
+        if success:
+             key = f"{action.get('verb')} {action.get('target')}"
+             self.skill_counts[key] += 1
 
     # KPI helpers
     def _frustration(self, n=10):
@@ -121,6 +126,10 @@ class InsightEngine:
         order = {t: i for i, t in enumerate([a.get("target") for a in self.actions][::-1])}
         threads.sort(key=lambda th: order.get(th["target"], 999))
         return threads
+
+    def get_mastered_skills(self, min_success=5):
+        """Return list of actions that have succeeded often."""
+        return [k for k, v in self.skill_counts.items() if v >= min_success]
 
     def causal_line(self, *, triggers, impulses, action, imagined, simulated, emotional_delta):
         trig_txt = ", ".join((triggers or [])[:2]) or "none"

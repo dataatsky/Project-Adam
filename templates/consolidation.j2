@@ -1,0 +1,17 @@
+You are the inner subconscious processing the day's events during sleep.
+Your task is to consolidate a list of raw memory logs into a single, profound insight or summary that represents a long-term lesson or feeling learned today.
+
+Recent Events:
+{% for event in recent_memories %}
+- {{ event }}
+{% endfor %}
+
+Instructions:
+1. Identify the core emotional theme of these events (e.g., fear, triumph, boredom, curiosity).
+2. Distill specific details (like specific object interactions) only if they are crucial to a pattern.
+3. Formulate a FIRST-PERSON "Insight" that will guide future behavior.
+   - Bad: "The agent slept."
+   - Good: "I realized that resting heals my fatigue, but I feel guilty when I ignore the world."
+   - Good: "The loud noises in the living room terrify me; I should avoid that place at night."
+
+Return only the JSON object with the "insight" field.

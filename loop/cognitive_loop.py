@@ -117,7 +117,13 @@ class CognitiveLoop:
         self._ui_status("Orienting (Subconscious)…")
         self.log.info("— 2. ORIENTING —")
         sensory = world_state.get("sensory_events", [])
-        query_text = " ".join([f"{e.get('type','')} of {e.get('object','')} which is {e.get('details','')}" for e in sensory if 'object' in e])
+        # Phase 3: Contextual Retrieval - Include Goal and Location
+        current_goal = world_state.get("goal") or "None"
+        location = world_state.get("agent_location") or "Unknown"
+        
+        # Build query from sensory + context
+        objects_query = " ".join([f"{e.get('type','')} {e.get('object','')}" for e in sensory if 'object' in e])
+        query_text = f"Context: {location}, Goal: {current_goal}. Sensory: {objects_query}"
         if not query_text:
             print("No object-based sensory events for memory query.")
             self.last_resonant_memories = []
@@ -134,6 +140,7 @@ class CognitiveLoop:
             "world_state": world_state,
             "resonant_memories": self.last_resonant_memories,
             "recent_diaries": [entry.get("text") for entry in self.diary_entries[-3:]],
+            "mastered_skills": self.insight.get_mastered_skills() if self.insight else [],
         }
         if self.security:
             payload = self.security.before_psyche("generate_impulse", payload)
@@ -163,15 +170,26 @@ class CognitiveLoop:
         self.log.info("— 2.5. IMAGINE & REFLECT —")
         hypothetical = []
         top = sorted(initial_impulses.get("impulses", []), key=lambda x: x.get("urgency", 0), reverse=True)[: self.imagine_top_k]
+        
+        # Collect actions for batch
+        actions_to_imagine = []
         for imp in top:
-            if not isinstance(imp, dict):
-                continue
-            action = {"verb": imp.get("verb"), "target": imp.get("target")}
-            imagined = self.psyche.imagine(action) if self.psyche else "My imagination is fuzzy."
-            sim = world.clone().process_action(action)
+            if isinstance(imp, dict):
+                 actions_to_imagine.append({"verb": imp.get("verb"), "target": imp.get("target")})
+        
+        # Parallel Imagination (Batch Call)
+        imagined_results = []
+        if self.psyche and actions_to_imagine:
+            imagined_results = self.psyche.imagine_batch(actions_to_imagine)
+        else:
+            imagined_results = ["My imagination is fuzzy." for _ in actions_to_imagine]
+            
+        # Simulation
+        for i, action in enumerate(actions_to_imagine):
+            sim = world.clone().process_action(action, agent_id=self.agent_id)
             hypothetical.append({
                 "action": action,
-                "imagined": imagined,
+                "imagined": imagined_results[i] if i < len(imagined_results) else "Error",
                 "simulated": sim.get("reason"),
             })
         self.last_hypothetical = hypothetical
@@ -187,8 +205,21 @@ class CognitiveLoop:
                 payload = self.security.before_psyche("reflect", payload)
             reflection = self.psyche.reflect(payload)
             self.log.debug(f"Reflection: {reflection.get('reasoning')}")
+            if reflection.get("thoughts_on_others"):
+                self.log.info(f"Theory of Mind: {reflection.get('thoughts_on_others')}")
+                self._ui_status(f"Thinking about others: {reflection.get('thoughts_on_others')}")
         if self.security:
             self.security.after_psyche("reflect", payload, reflection)
+        
+        # Phase 3: Dynamic Agency - Check for new goal proposal
+        new_goal = reflection.get("new_goal")
+        if new_goal and hasattr(world, "set_goal"):
+            steps = reflection.get("new_goal_plan")
+            self.log.info(f"Psyche proposed new goal: {new_goal} with plan: {steps}")
+            # Idealy the LLM would provide steps, but for now we rely on the name guiding future 'subconscious' logic 
+            # to pick impulses relevant to that goal name.
+            world.set_goal(new_goal, steps=steps, agent_id=self.agent_id)
+
         return reflection
 
     def decide(self, final_action, reasoning):
@@ -201,7 +232,7 @@ class CognitiveLoop:
     def act(self, world, action, reasoning, world_state, impulses):
         self._ui_status("Acting…")
         self.log.info("— 4. ACTING —")
-        result = world.process_action(action)
+        result = world.process_action(action, agent_id=self.agent_id)
         self.log.debug(f"Result: {result}")
         if result.get("state_change") and "hunger" in result["state_change"]:
             self.agent_status['needs']['hunger'] = max(0, self.agent_status['needs']['hunger'] + result['state_change']['hunger'])
@@ -210,8 +241,9 @@ class CognitiveLoop:
         sensed_str = f"I sensed {', '.join(sensed_objs)}." if sensed_objs else "I sensed nothing unusual."
         decision_str = f"I decided to {action['verb']}" if action.get('target') == 'null' else f"I decided to {action['verb']} the {action['target']}"
         reason = result.get('reason', 'it just happened.')
+        loc_name = world_state.get("agent_location", "unknown place")
         event_desc = (
-            f"I was in the {world.agent_location}. {sensed_str} My emotional state became {self.current_mood}. "
+            f"I was in the {loc_name}. {sensed_str} My emotional state became {self.current_mood}. "
             f"{decision_str}. {'The result was: ' if result.get('success') else 'But it failed because '}" + reason
         )
         self.recent_memories.append(event_desc)
@@ -224,6 +256,23 @@ class CognitiveLoop:
                 self.memory_id_counter += 1
         except Exception as e:
             self.log.warning(f"Memory upsert error: {e}")
+
+        # Phase 3: Consolidation (Sleep)
+        if action.get("verb") == "sleep" and result.get("success"):
+            self.log.info("Agent is sleeping... Triggering memory consolidation.")
+            t0 = time.time()
+            try:
+                if self.psyche and hasattr(self.psyche, "consolidate"):
+                     # Gather recent narrative memories/diaries
+                     mems = self.recent_memories[-10:] # last 10
+                     insight = self.psyche.consolidate(mems)
+                     if insight and self.memory:
+                         self.log.info(f"Consolidated Insight: {insight}")
+                         self.memory.upsert_texts([f"INSIGHT: {insight}"])
+                         self.recent_memories.append(f"Upon waking, I realized: {insight}")
+            except Exception as e:
+                self.log.error(f"Consolidation failed: {e}")
+
         # --- Insights & snapshot ---
         triggers = [f"{e.get('object')} : {e.get('details')}" for e in world_state.get('sensory_events', []) if 'object' in e]
         imps = impulses.get('impulses', []) if impulses else []
@@ -255,7 +304,7 @@ class CognitiveLoop:
             "experiment_tag": self.experiment_tag,
             "agent_id": self.agent_id,
             "world_time": world.world_time,
-            "location": world.agent_location,
+            "location": world_state.get("agent_location"),
             "mood": self.current_mood,
             "mood_intensity": self.mood_intensity,
             "sensory_events": json.dumps(world_state.get('sensory_events', []), ensure_ascii=False),
@@ -294,6 +343,7 @@ class CognitiveLoop:
 
     def run_loop(self):
         world = self.world_factory()
+        world.add_agent(self.agent_id) # Ensure this agent exists
         if self.security:
             self.security.update_world(world)
         while self.is_running:
@@ -305,7 +355,7 @@ class CognitiveLoop:
                 self.security.before_cycle(self.cycle_counter)
             world.update()
             self.agent_status['needs']['hunger'] = min(1, self.agent_status['needs']['hunger'] + 0.005)
-            ws = world.get_world_state()
+            ws = world.get_world_state(agent_id=self.agent_id)
             if self.security:
                 ws = self.security.modify_world_state(ws)
                 try:
