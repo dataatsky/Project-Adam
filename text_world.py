@@ -128,7 +128,7 @@ class TextWorld:
             # Initialize default agent 'adam1'
             self.add_agent("adam1")
         
-    def add_agent(self, agent_id: str):
+    def add_agent(self, agent_id: str, **kwargs):
         """Register a new agent in the world."""
         start_pos = (0, 0) # Living Room
         if agent_id not in self.agents:
@@ -138,12 +138,15 @@ class TextWorld:
                 "inventory": [],
                 "hunger": 0.25,
                 "mood_intensity": 0.4,
+                "mood_intensity": 0.4,
                 "active_goal": None,
                 "goal_progress_index": 0,
                 "current_goal_steps_done": [],
                 "goal_history": [],
                 "recent_examined": {},
-                "inbox": []
+                "inbox": [],
+                "script": kwargs.get("script", []), 
+                "control_type": kwargs.get("control_type", "autonomous") 
             }
             # Initial goal setup
             self._ensure_goal(agent_id)
@@ -311,6 +314,8 @@ class TextWorld:
             self.agents[agent_id]["pos"] = data.get("pos", (0, 0))
             self.agents[agent_id]["hunger"] = data.get("hunger", 0.0)
             self.agents[agent_id]["inventory"] = data.get("inventory", [])
+            self.agents[agent_id]["script"] = data.get("script", [])
+            self.agents[agent_id]["control_type"] = data.get("control_type", "autonomous")
 
     def set_goal(self, goal_name: str, steps: list[str] = None, agent_id: str = "adam1"):
         """Manually set the agent's goal, clearing progress."""
@@ -429,6 +434,32 @@ class TextWorld:
         # random events for variety (power flickers, drafts, etc.)
         if self.random.random() < 0.15:
             self._trigger_random_event(events)
+
+        # Process Agents
+        for agent_id, agent_data in self.agents.items():
+            # Scripted Agents
+            if agent_data.get("control_type") == "scripted":
+                script = agent_data.get("script", [])
+                if script:
+                    # Pop first action
+                    action_str = script.pop(0)
+                    # Parse simple "verb target" or "verb"
+                    parts = action_str.split(" ", 1)
+                    verb = parts[0]
+                    target = parts[1] if len(parts) > 1 else None
+                    target = parts[1] if len(parts) > 1 else None
+                    # Execute
+                    # Found signature: process_action(self, action: Dict[str, str], agent_id: str = "adam1")
+                    action_payload = {"verb": verb, "target": target or ""}
+                    result = self.process_action(action_payload, agent_id=agent_id)
+                    
+                    # Append events if observable by main agent
+                    if verb == "say":
+                         events.append(f"{agent_id} says: '{target}'")
+                else:
+                    # Loop script? Or stop. Default loop for annoyance.
+                    pass 
+
 
         # restock fridge occasionally
         kitchen_loc = self.map.get_location(*self.room_coords.get("kitchen", (0, 1)))
@@ -637,6 +668,9 @@ class TextWorld:
             "sit": self._act_sit,
             "play": self._act_play,
             "help": self._act_help,
+            "break": self._act_break,
+            "smash": self._act_break,
+            "destroy": self._act_break,
         }
 
         if verb not in handler_map:
@@ -652,6 +686,9 @@ class TextWorld:
     
     def _act_move(self, target, agent, **kwargs):
         """Handle navigation between rooms via grid."""
+        if not target:
+            return {"success": False, "reason": "I need a direction to move (North, South, East, West)."}
+            
         direction = target.lower()
         curr = agent["pos"]
         new_pos = self.map.move(curr[0], curr[1], direction)
@@ -884,6 +921,22 @@ class TextWorld:
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.05)
             return {"success": True, "reason": f"I rest briefly on the {target}."}
         return {"success": False, "reason": f"I can't sit on {target}."}
+
+    def _act_break(self, target, obj, props, state, agent, **kwargs):
+        """Violent action: Break/Destroy an object."""
+        if not obj:
+             return {"success": False, "reason": f"I don't see a {target} here."}
+        
+        if "breakable" in props:
+            if state == "broken":
+                return {"success": False, "reason": f"The {target} is already broken."}
+            
+            obj["state"] = "broken"
+            agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.2) # Violence excites/agitates
+            self.noise_level = min(1.0, self.noise_level + 0.5) # Loud noise
+            return {"success": True, "reason": f"I smashed the {target} into pieces!", "violent": True}
+        
+        return {"success": False, "reason": f"I cannot break the {target}."}
 
     def _act_play(self, target, obj, props, state, agent, **kwargs):
         if target == "telescope":

@@ -95,3 +95,24 @@ class PsycheClient:
                     delay *= 2
                 else:
                     return ""
+    def theory_of_mind(self, other_agent_id: str, environment_desc: str, recent_actions: str, relationship_context: str) -> dict:
+        url = f"{self.base_url}/theory_of_mind"
+        delay = self.backoff
+        payload = {
+            "other_agent_id": other_agent_id,
+            "environment_desc": environment_desc,
+            "recent_actions": recent_actions,
+            "relationship_context": relationship_context
+        }
+        for attempt in range(self.retries + 1):
+            try:
+                r = requests.post(url, json=payload, timeout=self.timeout)
+                r.raise_for_status()
+                return r.json() or {}
+            except Exception as e:
+                self.log.warning(f"{url} attempt {attempt+1} failed: {e}")
+                if attempt < self.retries:
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    return {}

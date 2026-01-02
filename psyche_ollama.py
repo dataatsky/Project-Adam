@@ -79,6 +79,7 @@ class ReflectResponse(BaseModel):
     final_action: Action
     reasoning: str
     thoughts_on_others: Optional[str] = None
+    constitutional_check: Optional[str] = None
     new_goal: Optional[str] = None
     new_goal_plan: Optional[List[str]] = None # List of sub-steps
 
@@ -87,6 +88,19 @@ class ConsolidateRequest(BaseModel):
 
 class ConsolidateResponse(BaseModel):
     insight: str
+
+class ToMRequest(BaseModel):
+    other_agent_id: str
+    environment_desc: str
+    recent_actions: str
+    relationship_context: str
+
+class ToMResponse(BaseModel):
+    agent_id: str
+    predicted_goal: str
+    beliefs: List[str]
+    trust_level: float
+    potential_threat: bool
 
 # --- INSTRUCTOR CLIENT ---
 # We patch the OpenAI client to use Instructor, pointing it to local Ollama
@@ -349,6 +363,51 @@ def consolidate():
         REQS.labels(endpoint, "500").inc()
         LAT.labels(endpoint).observe(time.time() - t0)
         return jsonify({"insight": "I slept peacefully, my mind blank."}), 200
+
+
+@app.route('/theory_of_mind', methods=['POST'])
+def theory_of_mind():
+    t0 = time.time()
+    endpoint = "theory_of_mind"
+    try:
+        try:
+            req = ToMRequest.model_validate(request.get_json(force=True) or {})
+        except ValidationError as ve:
+            REQS.labels(endpoint, "400").inc()
+            return jsonify({"error": "invalid payload", "details": ve.errors()}), 400
+        
+        data = req.model_dump()
+        prompt = render_template('theory_of_mind.j2', **data)
+        log.info("tom_prompt_generated", extra={"endpoint": endpoint})
+
+        try:
+            resp = client.chat.completions.create(
+                model=OLLAMA_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=ToMResponse,
+                max_retries=int(os.getenv("OLLAMA_RETRIES", "2")),
+            )
+            OLLAMA_CALLS.labels(endpoint, "ok").inc()
+        except Exception as e:
+            log.error(f"Attributes validation failed: {e}")
+            OLLAMA_CALLS.labels(endpoint, "err").inc()
+            raise e
+
+        out = resp.model_dump()
+        REQS.labels(endpoint, "200").inc()
+        LAT.labels(endpoint).observe(time.time() - t0)
+        return jsonify(out)
+    except Exception as e:
+        log.warning(f"/{endpoint} failed: {e}")
+        REQS.labels(endpoint, "500").inc()
+        # Fallback
+        return jsonify({
+            "agent_id": "unknown",
+            "predicted_goal": "unknown",
+            "beliefs": [],
+            "trust_level": 0.5,
+            "potential_threat": False
+        }), 200
 
 
 @app.get('/metrics')

@@ -1,0 +1,19 @@
+You are the empathetic mind of Adam. You are observing another agent: "{{ other_agent_id }}".
+Based on their recent actions and the current environment, infer their internal mental state.
+
+Context:
+- Environment: {{ environment_desc }}
+- Recent Actions of {{ other_agent_id }}: {{ recent_actions }}
+- History of Interaction: {{ relationship_context }}
+
+Respond ONLY with this JSON structure:
+{
+    "agent_id": "{{ other_agent_id }}",
+    "predicted_goal": "What are they trying to achieve right now?",
+    "beliefs": [
+        "What do they believe to be true relative to their goal?",
+        "e.g. 'They believe the door is locked'"
+    ],
+    "trust_level": 0.0 to 1.0 (How much do you trust them?),
+    "potential_threat": boolean
+}

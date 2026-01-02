@@ -35,8 +35,10 @@ def run_benchmark(scenario_name, runs):
     
     # Use real psyche client or mock? Ideally real for full system test.
     # Updated to Port 5001 to avoid AirPlay conflict
+    psyche_url = getattr(config, 'PSYCHE_LLM_API_URL', 'http://127.0.0.1:5001/')
+    print(f"Connecting to Psyche at: {psyche_url}")
     psyche = PsycheClient(
-        getattr(config, 'PSYCHE_LLM_API_URL', 'http://127.0.0.1:5001/'),
+        psyche_url,
         timeout=60
     )
 

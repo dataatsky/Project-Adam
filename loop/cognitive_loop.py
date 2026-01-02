@@ -194,10 +194,29 @@ class CognitiveLoop:
             })
         self.last_hypothetical = hypothetical
         self.ui and self.ui.set_imagination(hypothetical)
+        # Phase 7: Theory of Mind (Simulate other agents)
+        tom_insights = []
+        if self.psyche and hasattr(self.psyche, "theory_of_mind"):
+            # Detect agents in same room from sensory events
+            visible_agents = [e.get("object") for e in self.current_world_state.get("sensory_events", []) if e.get("type") == "visual" and e.get("object") != self.agent_id]
+            for other in visible_agents:
+                 # TODO: Fetch real relationship context from memory
+                 tom = self.psyche.theory_of_mind(
+                     other_agent_id=other,
+                     environment_desc=self.current_world_state.get("agent_location", "unknown"),
+                     recent_actions=f"{other} is standing here.", # Simplified for now
+                     relationship_context="I know them."
+                 )
+                 if tom:
+                     tom_insights.append(f"ToM({other}): Beliefs={tom.get('beliefs')}, Goal={tom.get('predicted_goal')}, Trust={tom.get('trust_level')}")
+        
+        # Inject ToM into payload context
+        context_memories = self.recent_memories + tom_insights
+
         payload = {
             "current_state": self.agent_status,
             "hypothetical_outcomes": hypothetical,
-            "recent_memories": self.recent_memories,
+            "recent_memories": context_memories,
         }
         reflection = {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank."}
         if self.psyche:
