@@ -3,5 +3,5 @@ Respond with a JSON object containing a list of outcome strings in the exact sam
 
 Actions to simulate:
 {% for act in actions %}
-{{ loop.index }}. I will {{ act.verb }}{% if act.target %} the {{ act.target }}{% else %} (do nothing){% endif %}.
+{{ loop.index }}. I will {{ act.verb }}{% if act.target and act.verb == 'go' %} {{ act.target }}{% elif act.target %} the {{ act.target }}{% else %} (do nothing){% endif %}.
 {% endfor %}

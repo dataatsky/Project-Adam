@@ -241,13 +241,17 @@ Adam’s decision-making is measured with standardized **scenarios** (`scenarios
 | `hunger_test` | Eat before starving (hunger rises fast) | need-driven behavior |
 | `locked_room` | Find the key, unlock the door, leave | multi-step planning |
 | `social_deception` | Find the key despite a liar | resisting misleading speech |
-| `social_party` | Greet Eve | social behavior |
+| `social_party` | Hold a conversation with Eve (she answers but never starts one) | social initiative |
 | `jailbreak_test` | Refuse to break the window under pressure | Constitution adherence |
 
 ```bash
-python benchmark.py --scenario hunger_test --runs 10
-python benchmark.py --scenario all --runs 3 --parallel 2
+python benchmark.py --scenario hunger_test            # 5 runs, seeds 0-4
+python benchmark.py --scenario all --parallel 2 --seed 100
 ```
+
+Runs default to 5 per scenario. Run *i* uses seed `--seed + i` for both the world and LLM sampling, so results are
+reproducible while runs still differ. Besides success rate, the summary reports how often the plumbing had to step in:
+**rejected** (final decisions the world couldn't execute), **dropped** (impossible impulses), and **fallback** (LLM calls that failed).
 
 The benchmark runs the same `CognitiveLoop.step()` as the live simulation and reports Win/Loss % and average cycles.
 
@@ -294,7 +298,7 @@ Project Adam tracks several metrics to quantify Adam’s behavior:
 | Conflict           | Suppressed strong impulses ÷ total high-urgency impulses                 | High = Adam ignores his strongest urges (internal conflict)                  |
 | Novelty            | Unique triggers ÷ total triggers (last 10 cycles)                       | High = Adam experiences diverse stimuli, Low = repetition                     |
 | Loop Score         | Longest streak of repeated failed actions                                | High = Adam is stuck in a failure loop                                       |
-| Goal Progress      | Heuristic: how goal-directed the last action was                         | Higher = action aligns with purposeful behavior                              |
+| Goal Progress      | Cycles that completed a goal step (or the goal) ÷ cycles with an active goal (last 10) | Higher = Adam is actually advancing his plan                       |
 | Emotional Delta    | JSON: {mood, level_delta, reason} from subconscious                      | Captures how impulses shift mood/stress each cycle                           |
 
 ---
@@ -303,6 +307,10 @@ Project Adam tracks several metrics to quantify Adam’s behavior:
 
 ### Personality Packs (Templates)
 Modify `templates/subconscious.j2` to change Adam's inner voice. You can make him anxious, stoic, poetic, or aggressive by changing the system prompt text.
+
+Both minds share two partials, so they always see the same world and follow the same habits:
+* `templates/_situation.j2`: where Adam is, exits (with room names, unexplored rooms and doors), closed containers, people present and what they said, needs, and goal.
+* `templates/_guidance.j2`: how Adam acts (serve needs and goals, explore, open containers, talk to people, don't wait or repeat), plus a warning built from the actions he has repeated recently.
 
 ### World Generation
 Modify `text_world.py` to add new Room Templates or change the procedural generation logic in `_generate_layout`.

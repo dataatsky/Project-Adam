@@ -31,3 +31,17 @@ def test_compute_behavior_metrics_adds_columns():
     assert "avg_impulse_urgency" in df.columns
     assert "mood_delta" in df.columns
     assert df.loc[1, "success_rate"] == 0.5
+
+
+def test_mismatch_rate_ignores_options_that_were_not_imagined():
+    from analysis_utils import compute_mismatch_rate_fuzzy
+
+    df = pd.DataFrame({
+        "imagined_outcomes_parsed": [[None, None], ["I reach the kitchen", None]],
+        "simulated_outcomes_parsed": [["I walked north.", "Time passes."], ["I walked north into the kitchen.", "Time passes."]],
+    })
+    compute_mismatch_rate(df)
+    assert pd.isna(df.loc[0, "mismatch_rate"])  # nothing imagined: no data, not 100% mismatch
+    assert df.loc[1, "mismatch_rate"] == 1.0    # exact comparison of the one imagined option
+    compute_mismatch_rate_fuzzy(df)
+    assert pd.isna(df.loc[0, "mismatch_rate"])

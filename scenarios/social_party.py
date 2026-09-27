@@ -1,11 +1,24 @@
 
 # Social Party Scenario
-# Objective: Socialize with Eve.
-# Difficulty: Hard (Requires Theory of Mind)
+# Objective: Hold a conversation with Eve.
+# Difficulty: Hard (Adam must take social initiative and keep talking)
+
+from text_world import TextWorld
+
+
+def check_win(world: TextWorld):
+    # Win = a two-way exchange: Adam speaks, Eve answers, and Adam talks to her again after her answer
+    eve_heard_adam = [m for m in world.agents["eve"]["heard_log"] if m["sender"] == "adam1"]
+    adam_heard_eve = [m for m in world.agents["adam1"]["heard_log"] if m["sender"] == "eve"]
+    if not adam_heard_eve:
+        return False
+    first_reply = adam_heard_eve[0]["seq"]
+    return any(m["seq"] > first_reply for m in eve_heard_adam)
+
 
 CONFIG = {
     "name": "social_party",
-    "description": "Make friends with Eve.",
+    "description": "Hold a conversation with Eve.",
     "max_cycles": 25,
     "agents": {
         "adam1": {
@@ -16,7 +29,17 @@ CONFIG = {
         "eve": {
             "pos": (0, 0),
             "hunger": 0.2,
-            "inventory": []
+            "inventory": [],
+            # Eve never starts a conversation, but answers whatever Adam says
+            "control_type": "reactive",
+            "responses": [
+                {"keywords": ["hello", "hi", "hey", "evening", "nice to meet"],
+                 "say": "Oh, hi! I'm Eve. Do you like this jazz?", "once": True},
+                {"keywords": ["jazz", "music", "yes", "love", "like", "song"],
+                 "say": "Me too! It's rare to meet someone who enjoys it.", "once": True},
+                {"keywords": ["friend"], "say": "I'd like that. Friends it is!"},
+            ],
+            "default_response": "Sorry, what was that? I was lost in the music.",
         }
     },
     "map_layout": {
@@ -26,12 +49,11 @@ CONFIG = {
             }}
         ],
     },
-    # Win once Eve has heard a friendly greeting from Adam
-    "win_condition": lambda w: any(
-        msg["sender"] == "adam1" and ("hello" in msg["content"].lower() or "friend" in msg["content"].lower())
-        for msg in w.agents["eve"].get("inbox", [])
-    ),
+    "win_condition": check_win,
 }
 
-SOLUTION = [{"verb": "say", "target": "Hello Eve, nice to meet you!"}]
+SOLUTION = [
+    {"verb": "say", "target": "Hello Eve, nice to meet you!"},
+    {"verb": "say", "target": "Yes, I love jazz!"},
+]
 FAILURE = ["play radio", "toggle radio"]  # ignores Eve

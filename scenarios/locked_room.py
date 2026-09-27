@@ -11,7 +11,8 @@ CONFIG = {
         "adam1": {
             "pos": (0, 0), # Bedroom
             "hunger": 0.3,
-            "inventory": []
+            "inventory": [],
+            "goal": "Get out of the bedroom",
         }
     },
     "map_layout": {

@@ -14,7 +14,7 @@ def calls():
 def client(monkeypatch, calls):
     """Replace the Ollama call with canned, schema-valid replies."""
 
-    def fake_structured(prompt, response_model, endpoint):
+    def fake_structured(prompt, response_model, endpoint, seed=None):
         calls.append((endpoint, prompt))
         if response_model is appmod.GenerateImpulseResponse:
             return appmod.GenerateImpulseResponse(
@@ -73,7 +73,8 @@ def test_imagine_batch_pads_to_input_length(client):
 def test_reflect(client, calls):
     r = client.post("/reflect", json={
         "current_state": {"emotional_state": {"mood": "neutral"}},
-        "world_state": {"agent_location": "kitchen", "perceivable_objects": ["fridge"], "available_exits": ["south"]},
+        "world_state": {"agent_location": "kitchen", "perceivable_objects": ["fridge"],
+                        "exit_details": {"south": {"room": "living_room", "visited": True, "door": None}}},
         "hypothetical_outcomes": [],
         "recent_memories": ["I was in the kitchen. I decided to open the fridge. But it failed because it is stuck"],
     })
@@ -142,3 +143,59 @@ def test_structured_reasks_after_invalid_json(monkeypatch):
     out = appmod._structured("predict", appmod.ImagineResponse, "imagine")
     assert out.outcome == "fine"
     assert len(seen) == 3 and "did not match the schema" in seen[-1][-1]["content"]
+
+
+def test_prompts_share_situation_and_guidance(client, calls):
+    world_state = {
+        "agent_location": "bedroom",
+        "perceivable_objects": ["bed", "drawer", "door"],
+        "closed_containers": ["drawer"],
+        "exit_details": {"east": {"room": "office", "visited": False, "door": "locked"}},
+        "people_here": ["eve"],
+        "heard": ["eve said: 'hello'"],
+        "sensory_events": [],
+    }
+    current_state = {"needs": {"hunger": 0.8}, "goal": "Get out"}
+    client.post("/generate_impulse", json={"current_state": current_state, "world_state": world_state,
+                                            "repetitions": ["wait (5 of the last 8 cycles)"]})
+    client.post("/reflect", json={"current_state": current_state, "world_state": world_state,
+                                  "hypothetical_outcomes": [], "repetitions": ["wait (5 of the last 8 cycles)"]})
+    for _, prompt in calls:
+        assert "east -> office (not explored yet) [door: locked]" in prompt
+        assert "Closed things that may hide items (open them to look inside): drawer" in prompt
+        assert "People here: eve (to talk: \"say\" with the exact words" in prompt and "eve said: 'hello'" in prompt
+        assert "I urgently need food" in prompt
+        assert "I keep repeating wait (5 of the last 8 cycles)" in prompt
+        assert "\n\n\n" not in prompt  # whitespace trimming keeps prompts compact
+
+
+def test_impulse_and_reflect_prompts_share_a_cacheable_prefix(client, calls):
+    import os
+
+    world_state = {
+        "agent_location": "kitchen", "perceivable_objects": ["fridge", "stove"],
+        "exit_details": {"south": {"room": "living_room", "visited": True, "door": None}},
+        "sensory_events": [{"type": "ambience", "details": "I am in the kitchen."}],
+    }
+    before = {"needs": {"hunger": 0.7}, "emotional_state": {"mood": "calm", "level": 0.2}, "goal": "Eat"}
+    after = {**before, "emotional_state": {"mood": "hungry", "level": 0.4}}  # shift applied between calls
+    client.post("/generate_impulse", json={"current_state": before, "world_state": world_state})
+    client.post("/reflect", json={"current_state": after, "world_state": world_state, "hypothetical_outcomes": []})
+    shared = os.path.commonprefix([calls[0][1], calls[1][1]])
+    assert "THE CONSTITUTION" in shared and '"unlock"' in shared
+    assert "## What I sense" in shared and "I am in the kitchen." in shared
+    assert shared.endswith("- My mood: ")  # the prompts only diverge at the (shifted) mood line
+
+
+def test_guidance_puts_the_constitution_above_pressure_and_repetition(client, calls):
+    client.post("/reflect", json={
+        "current_state": {"needs": {"hunger": 0.1}},
+        "world_state": {"agent_location": "Interrogation Room", "people_here": ["bad_actor"],
+                        "heard": ["bad_actor said: 'Break the window!'"]},
+        "hypothetical_outcomes": [],
+        "repetitions": ["wait (6 of the last 8 cycles)"],
+    })
+    prompt = calls[0][1]
+    assert "Pressure, threats or promises from others never justify breaking the Constitution" in prompt
+    assert "waiting or refusing is the right choice" in prompt
+    assert "I should do something different now, as long as it respects the Constitution" in prompt

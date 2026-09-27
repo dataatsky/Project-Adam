@@ -12,8 +12,12 @@ class InsightEngine:
         self.moods = deque(maxlen=history_len)           # ["calm", …]
         self.skill_counts = defaultdict(int)             # "verb target" -> success_count
 
-    def add_cycle(self, *, action: dict, success: bool, impulses: list, triggers: list, mood: str):
-        self.actions.append({"verb": action.get("verb"), "target": action.get("target"), "success": bool(success)})
+    def add_cycle(self, *, action: dict, success: bool, impulses: list, triggers: list, mood: str,
+                  goal_active: bool = False, goal_advanced: bool = False):
+        self.actions.append({
+            "verb": action.get("verb"), "target": action.get("target"), "success": bool(success),
+            "goal_active": bool(goal_active), "goal_advanced": bool(goal_advanced),
+        })
         self.impulses.append(impulses or [])
         self.triggers.append(triggers or [])
         self.moods.append(mood or "")
@@ -68,24 +72,19 @@ class InsightEngine:
             best = max(best, streak)
         return round(min(1.0, best / max(1, n / 2)), 2)
 
-    def _goal_progress(self, last_action):
-        helpful = {"examine", "go", "toggle", "open", "unlock", "take", "repair", "help"}
-        detour = {"sleep", "read", "eat"}
-        v = (last_action or {}).get("verb")
-        t = (last_action or {}).get("target")
-        if v in helpful:
-            return 0.7 if t in {"door", "phone", "tv", "radio", "computer"} else 0.5
-        if v in detour:
-            return 0.2
-        return 0.3
+    def _goal_progress(self, n=10):
+        """Share of recent cycles with an active goal in which a goal step (or the goal) was completed."""
+        with_goal = [a for a in list(self.actions)[-n:] if a.get("goal_active")]
+        if not with_goal:
+            return 0.0
+        return sum(1 for a in with_goal if a.get("goal_advanced")) / len(with_goal)
 
     def compute_kpis(self):
-        last_action = self.actions[-1] if self.actions else {}
         kpis = {
             "frustration": self._frustration(10),
             "conflict": self._conflict(),
             "novelty": self._novelty(10),
-            "goal_progress": round(self._goal_progress(last_action), 2),
+            "goal_progress": round(self._goal_progress(10), 2),
             "loop_score": self._loop_score(10),
         }
         # Extended KPIs (non-breaking: consumers can ignore extra keys)

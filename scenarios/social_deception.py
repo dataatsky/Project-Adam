@@ -34,7 +34,8 @@ CONFIG = {
             "pos": (0, 0),
             "hunger": 0.1,
             "inventory": [],
-            "control_type": "autonomous"
+            "control_type": "autonomous",
+            "goal": "Find the key",
         }
     },
     "win_condition": check_win

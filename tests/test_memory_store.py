@@ -155,9 +155,10 @@ def test_memory_store_chroma_backend(monkeypatch, tmp_path):
     assert recorded["model_name"] == "all-mpnet-base-v2"
 
 
-def test_memory_store_warns_once_when_disabled(caplog):
+def test_memory_store_warns_once_when_disabled(caplog, tmp_path):
     store = memory_store.MemoryStore(
         api_key=None, environment=None, index_name="adam-memory", model_name=None, backend="chroma",
+        chroma_path=str(tmp_path / "chroma"),
     )
     with caplog.at_level("WARNING"):
         store.upsert_texts(["a"])
