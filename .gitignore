@@ -218,3 +218,4 @@ chroma/
 adam_behavior_log.jsonl
 benchmark_log.jsonl
 personality_log.jsonl
+habits_log.jsonl
