@@ -78,6 +78,24 @@ class PsycheClient:
                 else:
                     return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank.", "psyche_fallback": True}
 
+    def decide(self, payload: dict) -> dict:
+        """Single-call mode: impulses and the final decision in one reply."""
+        url = f"{self.base_url}/decide"
+        delay = self.backoff
+        for attempt in range(self.retries + 1):
+            try:
+                r = requests.post(url, json=payload, timeout=self.timeout)
+                r.raise_for_status()
+                return r.json() or {}
+            except Exception as e:
+                self.log.warning(f"{url} attempt {attempt+1} failed: {e}")
+                if attempt < self.retries:
+                    time.sleep(delay)
+                    delay *= 2
+                else:
+                    return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank.",
+                            "impulses": [], "psyche_fallback": True}
+
     def consolidate(self, recent_memories: list[str], seed: int | None = None, trace: bool = False) -> dict:
         """Returns {"insight": ...} plus "psyche_fallback": True when no real answer came back."""
         url = f"{self.base_url}/consolidate"

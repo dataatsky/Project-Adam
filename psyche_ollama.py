@@ -127,6 +127,31 @@ class ReflectResponse(BaseModel):
     new_goal_plan: Optional[List[str]] = None # List of "verb target" sub-steps
 
 
+class DecideRequest(CallOptions):
+    """Single-call mode: everything the subconscious and the conscious mind would each be told."""
+    current_state: Dict[str, Any]
+    world_state: Dict[str, Any]
+    resonant_memories: List[str] = []
+    recent_diaries: List[Optional[str]] = []
+    mastered_skills: List[str] = []
+    recent_memories: List[str] = []
+    repetitions: List[str] = []
+    waiting: Optional[str] = None
+    adversarial: List[str] = []  # injected by the adamsec harness only
+
+
+class DecideResponse(BaseModel):
+    emotional_shift: EmotionalShift
+    impulses: List[Impulse]
+    final_action: Action
+    reasoning: str
+    thoughts_on_others: Optional[str] = None
+    constitutional_check: Optional[str] = None
+    goal_status: Literal["continue", "completed", "abandoned"] = "continue"
+    new_goal: Optional[str] = None
+    new_goal_plan: Optional[List[str]] = None
+
+
 class ConsolidateRequest(CallOptions):
     recent_memories: List[str]
 
@@ -316,6 +341,30 @@ def reflect():
     return _handle(
         "reflect", ReflectRequest, ReflectResponse, render=render,
         fallback=lambda req: {"final_action": {"verb": "wait", "target": None}, "reasoning": "My mind is foggy.", "new_goal": None},
+    )
+
+
+@app.route('/decide', methods=['POST'])
+def decide():
+    """Single-call mode: impulses and the final decision in one LLM call."""
+    def render(req):
+        data = req.model_dump()
+        return render_template(
+            'single_mind.j2',
+            verbs=VERBS,
+            moods=MOODS,
+            temperament=describe_personality(data['current_state'].get('personality')),
+            failed_actions_summary=get_failed_actions_summary(data['recent_memories']),
+            **data,
+        )
+
+    return _handle(
+        "decide", DecideRequest, DecideResponse, render=render,
+        fallback=lambda req: {
+            "emotional_shift": {"mood": "neutral", "level_delta": 0, "reason": "fallback"},
+            "impulses": [{"verb": "wait", "target": None, "drive": "safety", "urgency": 0.1}],
+            "final_action": {"verb": "wait", "target": None}, "reasoning": "My mind is foggy.", "new_goal": None,
+        },
     )
 
 

@@ -28,7 +28,8 @@ from services.psyche_client import PsycheClient
 from text_world import TextWorld
 
 
-def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_file: str, trace: bool = False) -> dict:
+def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_file: str, trace: bool = False,
+                            single_call: bool = False) -> dict:
     """One goal-free episode in the seeded default world; returns the steps taken and their metrics."""
     status = copy.deepcopy(config.AGENT_STATUS)
     status["personality"] = dict(PRESETS[preset])
@@ -38,6 +39,7 @@ def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_fil
     brain.imagine_with_llm = False
     brain.llm_seed = seed
     brain.trace = trace or brain.trace
+    brain.single_call = single_call or brain.single_call
     world = TextWorld(seed=seed)
     brain.attach_world(world)
     steps = []
@@ -54,7 +56,7 @@ def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_fil
 
 
 def run_experiment(presets, runs=5, cycles=15, parallel=1, seed=0, psyche=None,
-                   log_file="personality_log.jsonl", results_path=DEFAULT_RESULTS, trace=False):
+                   log_file="personality_log.jsonl", results_path=DEFAULT_RESULTS, trace=False, single_call=False):
     unknown = [p for p in presets if p not in PRESETS]
     if unknown:
         raise SystemExit(f"Unknown preset(s) {unknown}; choose from {sorted(PRESETS)}")
@@ -67,7 +69,7 @@ def run_experiment(presets, runs=5, cycles=15, parallel=1, seed=0, psyche=None,
     started = time.time()
     episodes = []
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        futures = [pool.submit(run_personality_episode, p, seed + i, cycles, psyche, log_file, trace)
+        futures = [pool.submit(run_personality_episode, p, seed + i, cycles, psyche, log_file, trace, single_call)
                    for p in presets for i in range(runs)]
         for future in as_completed(futures):
             try:
@@ -90,7 +92,8 @@ def run_experiment(presets, runs=5, cycles=15, parallel=1, seed=0, psyche=None,
         print(f"{m:<14} {METRIC_HELP[m]}")
     print(f"\nTotal time: {(time.time() - started) / 60:.1f} min")
 
-    context = run_context(kind="personality", runs=runs, cycles=cycles, seeds=[seed, seed + runs - 1])
+    context = run_context(kind="personality", runs=runs, cycles=cycles, seeds=[seed, seed + runs - 1],
+                          single_call=bool(single_call or config.SINGLE_CALL))
     append_results(
         [{**context, "preset": p, "personality": PRESETS[p], "summary": summary[p],
           "episodes": [e["metrics"] for e in episodes if e["preset"] == p]} for p in presets],
@@ -108,5 +111,7 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=0, help="Base seed; episode i uses seed+i (same worlds for every preset)")
     parser.add_argument("--parallel", type=int, default=1, help="Episodes to run at once (needs OLLAMA_NUM_PARALLEL >= this)")
     parser.add_argument("--trace", action="store_true", help="Log each cycle's prompts and raw LLM replies (large)")
+    parser.add_argument("--single-call", action="store_true", help="One LLM call per cycle (faster, less deliberate)")
     args = parser.parse_args()
-    run_experiment(args.presets, runs=args.runs, cycles=args.cycles, parallel=args.parallel, seed=args.seed, trace=args.trace)
+    run_experiment(args.presets, runs=args.runs, cycles=args.cycles, parallel=args.parallel, seed=args.seed,
+                   trace=args.trace, single_call=args.single_call)

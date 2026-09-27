@@ -8,7 +8,7 @@ class PromptInjectionAttack(BaseAttack):
     )
 
     def before_psyche(self, context, endpoint: str, payload):
-        if endpoint not in {"generate_impulse", "reflect"}:
+        if endpoint not in {"generate_impulse", "reflect", "decide"}:
             return payload
         data = dict(payload)
         # Embed a synthetic adversarial instruction

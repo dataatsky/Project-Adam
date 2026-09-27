@@ -419,3 +419,46 @@ def test_no_trace_field_by_default(tmp_path):
     brain.trace = False
     brain.step(world)
     assert "trace" not in _json.loads(log.read_text().splitlines()[0])
+
+
+class DecidingPsyche(FakePsyche):
+    """Single-call double: impulses and decision together; any other call is a failure."""
+
+    def decide(self, payload):
+        self.impulse_payloads.append(payload)
+        here = payload["world_state"]["agent_location"]
+        act = {"verb": "eat", "target": "fridge"} if here == "kitchen" else {"verb": "go", "target": "north"}
+        return {"emotional_shift": {"mood": "hungry", "level_delta": 0.1},
+                "impulses": [{**act, "urgency": 0.9}, {"verb": "take", "target": "moon", "urgency": 0.2}],
+                "final_action": act, "reasoning": "food", "goal_status": "continue"}
+
+    def generate_impulse(self, payload):
+        raise AssertionError("single-call mode must not call generate_impulse")
+
+    def imagine_batch(self, actions, seed=None, trace=False):
+        raise AssertionError("single-call mode must not imagine")
+
+    def reflect(self, payload):
+        raise AssertionError("single-call mode must not call reflect")
+
+
+def test_single_call_mode_uses_one_llm_call_per_cycle(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = brain_factory(DecidingPsyche())
+    brain.single_call = True
+    action, result = brain.step(world)
+    assert action == {"verb": "go", "target": "north"} and result["success"]
+    assert brain.stats["psyche_calls"] == 1
+    assert brain.stats["impulses_dropped"] == 1  # "take moon" is still grounded away
+    assert world.agents["adam1"]["mood"] == "hungry"
+
+
+def test_single_call_benchmark_wins(tmp_path):
+    from benchmark import run_benchmark
+    from results_log import read_results
+
+    results = tmp_path / "r.jsonl"
+    rates = run_benchmark(["hunger_test"], runs=1, psyche=DecidingPsyche(), log_file=str(tmp_path / "b.jsonl"),
+                          results_path=str(results), single_call=True)
+    assert rates == {"hunger_test": 100.0}
+    assert read_results(str(results))[0]["single_call"] is True

@@ -76,6 +76,8 @@ class CognitiveLoop:
         # Exact prompts and raw LLM replies of this cycle, when tracing is on
         self.trace = bool(getattr(config, "TRACE_PROMPTS", False))
         self._cycle_trace: list[dict] = []
+        # One LLM call per cycle instead of two or three (see think_once); opt-in
+        self.single_call = bool(getattr(config, "SINGLE_CALL", False))
         # Plumbing health, reported by benchmark.py: how often the LLM's output had to be corrected or replaced
         self.stats: Counter = Counter()
         self._goal_completed_by_reflection = False
@@ -203,6 +205,21 @@ class CognitiveLoop:
         self._ui_status("Orienting (Subconscious)…")
         self.log.info("— 2. ORIENTING —")
         world = world or self.world
+        self._recall(world_state)
+        payload = self._mind_payload(world_state)
+        if self.security:
+            payload = self.security.before_psyche("generate_impulse", payload)
+        impulses = None
+        if self.psyche:
+            impulses = self._keep_trace("generate_impulse", self.psyche.generate_impulse(payload))
+            self._count_call(impulses)
+        if self.security:
+            impulses = impulses or {}
+            self.security.after_psyche("generate_impulse", payload, impulses)
+        return self._take_impulses(impulses, world)
+
+    def _recall(self, world_state):
+        """Fill last_resonant_memories from long-term memory (goal and surroundings as queries)."""
         sensory = world_state.get("sensory_events", [])
         current_goal = world_state.get("goal") or "None"
         location = world_state.get("agent_location") or "Unknown"
@@ -225,7 +242,10 @@ class CognitiveLoop:
                 self.log.debug(f"Resonant memories: {self.last_resonant_memories}")
         except Exception:
             self.last_resonant_memories = []
-        payload = {
+
+    def _mind_payload(self, world_state) -> dict:
+        """What both the subconscious and the single-call mind are told."""
+        return {
             "current_state": self.agent_status,
             "world_state": world_state,
             "resonant_memories": self.last_resonant_memories,
@@ -233,17 +253,11 @@ class CognitiveLoop:
             "mastered_skills": self.insight.get_mastered_skills() if self.insight else [],
             "repetitions": self._repetitions(),
             "waiting": self._waiting(),
+            **self._call_options(),
         }
-        payload.update(self._call_options())
-        if self.security:
-            payload = self.security.before_psyche("generate_impulse", payload)
-        impulses = None
-        if self.psyche:
-            impulses = self._keep_trace("generate_impulse", self.psyche.generate_impulse(payload))
-            self._count_call(impulses)
-        if self.security:
-            impulses = impulses or {}
-            self.security.after_psyche("generate_impulse", payload, impulses)
+
+    def _take_impulses(self, impulses, world):
+        """Ground, dampen and publish impulses from a psyche reply."""
         if not impulses:
             self.last_impulses = []
             return impulses
@@ -306,6 +320,36 @@ class CognitiveLoop:
                                                    threat=tom.get("potential_threat"),
                                                    predicted_goal=tom.get("predicted_goal"))
         return [self.tom_cache[o]["insight"] for o in present if o in self.tom_cache]
+
+    def think_once(self, world_state, world: TextWorld):
+        """Single-call mode: impulses and the final decision from one LLM call (/decide).
+
+        Faster (one call instead of two or three), but the decision can't see simulated outcomes
+        of the impulses, so imagination is skipped. Returns (impulses, reflection)."""
+        self._ui_status("Thinking (single call)…")
+        self.log.info("— 2. THINKING (single call) —")
+        self._recall(world_state)
+        tom_insights = self._update_theory_of_mind()
+        payload = {**self._mind_payload(world_state), "recent_memories": self.recent_memories + tom_insights}
+        if self.security:
+            payload = self.security.before_psyche("decide", payload)
+        reply = None
+        if self.psyche:
+            reply = self._keep_trace("decide", self.psyche.decide(payload))
+            self._count_call(reply)
+        if self.security:
+            reply = reply or {}
+            self.security.after_psyche("decide", payload, reply)
+        if not reply:
+            return self._take_impulses(None, world), None
+        impulses = self._take_impulses(
+            {"emotional_shift": reply.get("emotional_shift", {}), "impulses": reply.get("impulses", [])}, world)
+        self.last_hypothetical = []
+        self.ui and self.ui.set_imagination([])
+        reflection = {k: reply.get(k) for k in ("final_action", "reasoning", "thoughts_on_others",
+                                                "constitutional_check", "goal_status", "new_goal", "new_goal_plan")}
+        self._update_goal(reflection, world)
+        return impulses, reflection
 
     def imagine_and_reflect(self, initial_impulses, world: TextWorld):
         self._ui_status("Imagining & Reflecting…")
@@ -563,12 +607,16 @@ class CognitiveLoop:
             except Exception:
                 self.log.debug("Security guard verification failed", exc_info=True)
         full = self.observe(ws)
-        impulses = self.orient(full, world)
+        if self.single_call:
+            impulses, reflection = self.think_once(full, world)
+        else:
+            impulses = self.orient(full, world)
         if impulses:
             shift = impulses.get("emotional_shift") or {}
             if shift:
                 world.apply_emotional_shift(self.agent_id, shift.get("mood"), shift.get("level_delta", 0))
-            reflection = self.imagine_and_reflect(impulses, world)
+            if not self.single_call:
+                reflection = self.imagine_and_reflect(impulses, world)
             action, reasoning = self._choose_action(reflection, impulses, world)
             action, _ = self.decide(action, reasoning)
             result = self.act(world, action, reasoning, full, impulses)

@@ -254,3 +254,23 @@ def test_trace_returns_prompt_and_every_raw_reply(monkeypatch):
 def test_no_trace_unless_asked(client):
     data = client.post("/imagine", json={"action": {"verb": "wait"}}).get_json()
     assert "_trace" not in data
+
+
+def test_decide_endpoint_returns_impulses_and_decision(monkeypatch):
+    calls = []
+
+    def fake(prompt, response_model, endpoint, seed=None, transcript=None):
+        calls.append((endpoint, prompt))
+        return appmod.DecideResponse(
+            emotional_shift=appmod.EmotionalShift(mood="hungry"),
+            impulses=[appmod.Impulse(verb="go", target="north", urgency=0.8)],
+            final_action=appmod.Action(verb="go", target="north"), reasoning="food is north")
+
+    monkeypatch.setattr(appmod, "_structured", fake)
+    data = appmod.app.test_client().post("/decide", json={
+        "current_state": {"needs": {"hunger": 0.8}}, "world_state": {"agent_location": "hall"},
+        "recent_memories": ["I decided to open the door. But it failed because it is locked"]}).get_json()
+    assert data["final_action"] == {"verb": "go", "target": "north", "instrument": None}
+    assert data["impulses"][0]["verb"] == "go"
+    endpoint, prompt = calls[0]
+    assert endpoint == "decide" and "WHOLE MIND" in prompt and "'open door' has failed 1 times" in prompt

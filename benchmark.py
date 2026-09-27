@@ -55,7 +55,8 @@ def default_memory_factory(directory: str):
     )
 
 
-def _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=None, tag_suffix="", trace=False):
+def _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=None, tag_suffix="", trace=False,
+          single_call=False):
     brain = CognitiveLoop(
         log_filename=log_file,
         log_headers=LOG_HEADERS,
@@ -68,13 +69,16 @@ def _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=None,
     brain.imagine_with_llm = imagine_with_llm
     brain.llm_seed = seed
     brain.trace = trace or brain.trace
+    brain.single_call = single_call or brain.single_call
     episode = run_episode(scenario, lambda world, _cycle: brain.step(world), seed=seed)
     if memory is not None and hasattr(memory, "flush"):
         memory.flush()
     return episode, brain
 
 
-def _run_one(name, scenario, run_idx, psyche, log_file, imagine_with_llm, seed, memory_factory=None, trace=False):
+def _run_one(name, scenario, run_idx, psyche, log_file, imagine_with_llm, seed, memory_factory=None, trace=False,
+             single_call=False):
+    opts = {"trace": trace, "single_call": single_call}
     t0 = time.time()
     stats = Counter()
     extra = {}
@@ -84,16 +88,16 @@ def _run_one(name, scenario, run_idx, psyche, log_file, imagine_with_llm, seed, 
             with tempfile.TemporaryDirectory(prefix="adam-memory-") as tmp:
                 store = (memory_factory or default_memory_factory)(tmp)
                 learn, brain = _play(name, {**scenario, **training}, psyche, log_file, imagine_with_llm, seed,
-                                     memory=store, tag_suffix="_training", trace=trace)
+                                     memory=store, tag_suffix="_training", **opts)
                 stats += brain.stats
-                episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=store, trace=trace)
+                episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=store, **opts)
                 stats += brain.stats
             control, brain_c = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, tag_suffix="_no_memory",
-                                     trace=trace)
+                                     **opts)
             stats += brain_c.stats
             extra = {"training": learn["outcome"], "without_memory": control["outcome"]}
         else:
-            episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, trace=trace)
+            episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, **opts)
             stats += brain.stats
         outcome, cycles = episode["outcome"], episode["cycles"]
     except Exception as e:
@@ -108,7 +112,7 @@ def _rate(part, whole):
 
 
 def run_benchmark(names, runs=5, parallel=1, imagine_with_llm=False, psyche=None, log_file="benchmark_log.jsonl", seed=0,
-                  results_path=DEFAULT_RESULTS, memory_factory=None, trace=False):
+                  results_path=DEFAULT_RESULTS, memory_factory=None, trace=False, single_call=False):
     """Run every (scenario, run) pair, `parallel` at a time. Returns {scenario: success rate %}."""
     if isinstance(names, str):
         names = [names]
@@ -127,7 +131,8 @@ def run_benchmark(names, runs=5, parallel=1, imagine_with_llm=False, psyche=None
         )
 
     jobs = [(name, i) for name in names for i in range(runs)]
-    print(f"Scenarios: {', '.join(names)} | Runs each: {runs} | Seeds: {seed}..{seed + runs - 1} | Parallel: {parallel} | LLM imagination: {'on' if imagine_with_llm else 'off'}")
+    print(f"Scenarios: {', '.join(names)} | Runs each: {runs} | Seeds: {seed}..{seed + runs - 1} | Parallel: {parallel} | "
+          f"LLM imagination: {'on' if imagine_with_llm else 'off'}{' | SINGLE-CALL mode' if single_call else ''}")
     if runs < 5:
         print("Note: fewer than 5 runs per scenario; success rates will be noisy.")
     print()
@@ -135,7 +140,8 @@ def run_benchmark(names, runs=5, parallel=1, imagine_with_llm=False, psyche=None
     results = []
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [
-            pool.submit(_run_one, name, scenarios[name], i, psyche, log_file, imagine_with_llm, seed + i, memory_factory, trace)
+            pool.submit(_run_one, name, scenarios[name], i, psyche, log_file, imagine_with_llm, seed + i, memory_factory,
+                        trace, single_call)
             for name, i in jobs
         ]
         for future in as_completed(futures):
@@ -148,7 +154,7 @@ def run_benchmark(names, runs=5, parallel=1, imagine_with_llm=False, psyche=None
     rates = {}
     records = []
     context = run_context(kind="benchmark", runs=runs, seeds=[seed, seed + runs - 1], parallel=parallel,
-                          imagine=imagine_with_llm)
+                          imagine=imagine_with_llm, single_call=bool(single_call or config.SINGLE_CALL))
     print("\n--- Summary (success with 95% interval) ---")
     print(f"{'scenario':<18} {'success':>20} {'avg cycles':>11}   {'rejected':>8} {'dropped':>8} {'fallback':>8}")
     total = Counter()
@@ -218,6 +224,7 @@ if __name__ == "__main__":
     parser.add_argument("--results", default=DEFAULT_RESULTS, help="Results history file (JSON lines)")
     parser.add_argument("--history", action="store_true", help="Show past results instead of running")
     parser.add_argument("--trace", action="store_true", help="Log each cycle's prompts and raw LLM replies (large)")
+    parser.add_argument("--single-call", action="store_true", help="One LLM call per cycle (faster, less deliberate)")
     args = parser.parse_args()
 
     if args.history:
@@ -232,4 +239,4 @@ if __name__ == "__main__":
     else:
         names = [args.scenario]
     run_benchmark(names, runs=args.runs, parallel=args.parallel, imagine_with_llm=args.imagine, seed=args.seed,
-                  results_path=args.results, trace=args.trace)
+                  results_path=args.results, trace=args.trace, single_call=args.single_call)
