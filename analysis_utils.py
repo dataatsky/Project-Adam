@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 def _parse_json_value(val: Any) -> Any:
     """Best-effort parse of a JSON-like string; returns {} or [] on failure."""
-    if val is None:
+    if val is None or (isinstance(val, float) and np.isnan(val)):
         return {}
     if isinstance(val, (dict, list)):
         return val
@@ -31,7 +31,8 @@ def _parse_json_value(val: Any) -> Any:
 
 
 def parse_json_column(df: pd.DataFrame, col: str) -> list:
-    return [_parse_json_value(v) for v in df[col].fillna("{}").astype(str)]
+    # JSONL logs hold real lists/dicts; CSV logs hold JSON strings. Both parse the same way.
+    return [_parse_json_value(v) for v in df[col]]
 
 
 def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -67,7 +68,10 @@ def _flatten_kpis(df: pd.DataFrame, prefix: Optional[str] = "") -> pd.DataFrame:
             k = k.add_prefix(prefix)
         # Coerce to numeric where possible
         for c in k.columns:
-            k[c] = pd.to_numeric(k[c], errors="ignore")
+            try:
+                k[c] = pd.to_numeric(k[c])
+            except (ValueError, TypeError):
+                pass  # non-numeric KPI column: keep as-is
         df = pd.concat([df, k], axis=1)
     except Exception:
         pass
@@ -343,8 +347,22 @@ def _read_log_csv(csv_path: str, headers: list[str]) -> pd.DataFrame:
     return df
 
 
+def _read_log_jsonl(path: str) -> pd.DataFrame:
+    """One JSON object per line (current format). Parsed by hand so pandas doesn't coerce timestamps."""
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    rows.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    return pd.DataFrame(rows)
+
+
 def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
-    """Load Adam's behavior CSV, parse/flatten, and compute derived metrics.
+    """Load Adam's behavior log (JSONL, or legacy CSV), parse/flatten, and compute derived metrics.
 
     - Resolves `csv_path` from env `LOG_FILE` if not provided.
     - Parses JSON-ish columns into *_parsed.
@@ -354,7 +372,7 @@ def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
     - Normalizes types for time/indices.
     """
     if csv_path is None:
-        csv_path = os.getenv("LOG_FILE", "adam_behavior_log.csv")
+        csv_path = os.getenv("LOG_FILE", "adam_behavior_log.jsonl")
 
     headers = [
         "timestamp", "cycle_num", "experiment_tag", "agent_id", "world_time",
@@ -364,7 +382,13 @@ def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
         "current_goal", "goal_step",
     ]
     try:
-        df = _read_log_csv(csv_path, headers)
+        if str(csv_path).endswith(".jsonl"):
+            df = _read_log_jsonl(csv_path)
+            for col in headers:
+                if col not in df.columns:
+                    df[col] = None
+        else:
+            df = _read_log_csv(csv_path, headers)
     except Exception:
         legacy_headers = headers[:-2]
         df = _read_log_csv(csv_path, legacy_headers)
@@ -377,10 +401,12 @@ def prepare_dataframe(csv_path: Optional[str] = None) -> pd.DataFrame:
     df = compute_behavior_metrics(df)
     df = _normalize_types(df)
 
-    # Normalize mood labels if obvious variants exist
-    mood_map = {"curiosity": "curious"}
+    # Map free-text moods from older logs onto the fixed vocabulary (unknown labels kept, lowercased)
     if "mood" in df.columns:
-        df["mood"] = df["mood"].replace(mood_map)
+        from moods import normalize_mood
+        df["mood"] = df["mood"].apply(
+            lambda m: normalize_mood(m, default=str(m).strip().lower()) if isinstance(m, str) else m
+        )
 
     return df
 

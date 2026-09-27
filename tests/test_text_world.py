@@ -181,3 +181,13 @@ def test_heard_log_is_bounded():
         world.process_action({"verb": "say", "target": f"message {i}"}, agent_id="eve")
     log = world.agents["adam1"]["heard_log"]
     assert len(log) == HEARD_LOG_LIMIT and log[-1]["content"] == f"message {HEARD_LOG_LIMIT + 19}"
+
+
+def test_world_moods_use_the_fixed_vocabulary():
+    world = TextWorld()
+    world.apply_emotional_shift("adam1", "Frustration", 0.1)
+    assert world.agents["adam1"]["mood"] == "frustrated"
+    world.apply_emotional_shift("adam1", "zany", 0.0)
+    assert world.agents["adam1"]["mood"] == "frustrated"  # unknown label: keep the current mood
+    world.add_agent("eve", mood="Joyful")
+    assert world.agents["eve"]["mood"] == "happy"

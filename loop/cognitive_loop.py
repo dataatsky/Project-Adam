@@ -24,10 +24,11 @@ class CognitiveLoop:
     `agent_status` is a read-only view of it, kept for prompts, UI and API.
     """
 
-    def __init__(self, log_filename, log_headers, ui=None, experiment_tag="baseline", agent_id="adam1", memory=None, psyche=None, world_factory: Optional[Callable[[], TextWorld]] = None):
+    def __init__(self, log_filename, log_headers, ui=None, experiment_tag="baseline", agent_id="adam1", memory=None, psyche=None, world_factory: Optional[Callable[[], TextWorld]] = None,
+                 initial_status: Optional[dict] = None):
         self.log = logging.getLogger(__name__ + ".CognitiveLoop")
-        # Starting state for a fresh (non-scenario) world, from config.AGENT_STATUS
-        self._initial_status = copy.deepcopy(getattr(config, "AGENT_STATUS", {
+        # Starting state for a fresh (non-scenario) world: `initial_status` if given, else config.AGENT_STATUS
+        self._initial_status = copy.deepcopy(initial_status or getattr(config, "AGENT_STATUS", {
             "emotional_state": {"mood": "neutral", "level": 0.1},
             "personality": {"curiosity": 0.8, "bravery": 0.6, "caution": 0.7},
             "needs": {"hunger": 0.1},
@@ -69,6 +70,9 @@ class CognitiveLoop:
         self.last_impulses: list[dict] = []
         self.diary_entries: list[dict] = []
         self.tom_cache: dict[str, dict] = {}
+        # What the plumbing corrected this cycle (logged with the cycle record)
+        self._cycle_dropped: list[dict] = []
+        self._cycle_rejected: Optional[dict] = None
         # Plumbing health, reported by benchmark.py: how often the LLM's output had to be corrected or replaced
         self.stats: Counter = Counter()
         self._goal_completed_by_reflection = False
@@ -131,15 +135,22 @@ class CognitiveLoop:
             self.security.update_world(self.world)
 
     def log_cycle_data(self, cycle_data):
+        """Append one cycle record: a JSON line for *.jsonl files, else a CSV row (nested values as JSON strings)."""
         import csv
         try:
             with _CSV_LOCK, open(self.log_filename, mode="a", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=self.log_headers)
+                if str(self.log_filename).endswith(".jsonl"):
+                    f.write(json.dumps(cycle_data, ensure_ascii=False, default=str) + "\n")
+                    return
+                writer = csv.DictWriter(f, fieldnames=self.log_headers, extrasaction="ignore")
                 if f.tell() == 0:
                     writer.writeheader()
-                writer.writerow(cycle_data)
+                writer.writerow({
+                    k: json.dumps(v, ensure_ascii=False, default=str) if isinstance(v, (dict, list)) else v
+                    for k, v in cycle_data.items()
+                })
         except Exception as e:
-            self.log.warning(f"CSV write error: {e}")
+            self.log.warning(f"Log write error: {e}")
 
     # helpers to touch UI
     def _ui_status(self, txt):
@@ -251,6 +262,7 @@ class CognitiveLoop:
                 grounded.append(imp)
             else:
                 self.stats["impulses_dropped"] += 1
+                self._cycle_dropped.append({"verb": imp.get("verb"), "target": imp.get("target"), "reason": why})
                 self.log.info(f"Dropped ungrounded impulse {imp.get('verb')} {imp.get('target')}: {why}")
         return {**impulses, "impulses": grounded or [{**WAIT_ACTION, "drive": "safety", "urgency": 0.1}]}
 
@@ -366,6 +378,7 @@ class CognitiveLoop:
         if ok:
             return final, reasoning
         self.stats["decisions_rejected"] += 1
+        self._cycle_rejected = {"verb": final.get("verb"), "target": final.get("target"), "reason": why}
         self.log.info(f"Rejected ungrounded decision {final.get('verb')} {final.get('target')}: {why}")
         target = final.get("target")
         wanted = final.get("verb") if target in NULL_TARGETS else f"{final.get('verb')} the {target}"
@@ -463,25 +476,28 @@ class CognitiveLoop:
             "location": world_state.get("agent_location"),
             "mood": self.current_mood,
             "mood_intensity": self.mood_intensity,
-            "sensory_events": json.dumps(world_state.get('sensory_events', []), ensure_ascii=False),
-            "resonant_memories": json.dumps(self.last_resonant_memories, ensure_ascii=False),
-            "impulses": json.dumps(imps, ensure_ascii=False),
+            "sensory_events": world_state.get('sensory_events', []),
+            "resonant_memories": self.last_resonant_memories,
+            "impulses": imps,
             "chosen_action": f"{action.get('verb')}_{action.get('target')}",
-            "action_result": json.dumps(result, ensure_ascii=False, default=str),
-            "imagined_outcomes": json.dumps([h.get("imagined", "") for h in self.last_hypothetical], ensure_ascii=False),
-            "simulated_outcomes": json.dumps([h.get("simulated", "") for h in self.last_hypothetical], ensure_ascii=False),
-            "emotional_delta": json.dumps(emotional_delta, ensure_ascii=False),
-            "kpis": json.dumps(kpis, ensure_ascii=False),
-            "snapshot": json.dumps({
+            "action_result": result,
+            "imagined_outcomes": [h.get("imagined", "") for h in self.last_hypothetical],
+            "simulated_outcomes": [h.get("simulated", "") for h in self.last_hypothetical],
+            "emotional_delta": emotional_delta,
+            "kpis": kpis,
+            "snapshot": {
                 "triggers": triggers,
                 "top_impulses": sorted(imps, key=lambda x: x.get('urgency', 0), reverse=True)[:3],
                 "chosen": action,
                 "simulated": result.get('reason', ''),
                 "emotional_delta": emotional_delta,
                 "kpis": kpis,
-            }, ensure_ascii=False),
+            },
             "current_goal": goal_state or "",
-            "goal_step": json.dumps(goal_step, ensure_ascii=False) if goal_step else "",
+            "goal_step": goal_step or "",
+            # JSONL only (not in the CSV columns): what the plumbing had to correct this cycle
+            "dropped_impulses": list(self._cycle_dropped),
+            "rejected_decision": self._cycle_rejected,
         }
         self.log_cycle_data(cycle_data)
         self._ui_vitals()
@@ -509,6 +525,7 @@ class CognitiveLoop:
         if world is not self.world:
             self.attach_world(world)
         self.cycle_counter += 1
+        self._cycle_dropped, self._cycle_rejected = [], None
         if self.security:
             self.security.before_cycle(self.cycle_counter)
         ws = world.get_world_state(agent_id=self.agent_id)

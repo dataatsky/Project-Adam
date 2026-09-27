@@ -125,7 +125,7 @@ def test_emotional_shift_applied_once_per_cycle(brain_factory):
     brain = brain_factory(FakePsyche(shift={"mood": "joyful", "level_delta": 0.1}))
     before = world.agents["adam1"]["mood_intensity"]
     brain.step(world)
-    assert world.agents["adam1"]["mood"] == "joyful"
+    assert world.agents["adam1"]["mood"] == "happy"  # "joyful" normalized to the fixed vocabulary
     assert world.agents["adam1"]["mood_intensity"] == pytest.approx(before + 0.1)
 
 
@@ -345,3 +345,42 @@ def test_every_llm_call_is_seeded_and_counted(brain_factory):
     # impulse + imagination + ToM + reflection; the failed ToM call is a fallback
     assert brain.stats["psyche_calls"] == 4 and brain.stats["psyche_fallbacks"] == 1
     assert not brain.tom_cache  # a fallback answer is not treated as insight
+
+
+def test_jsonl_log_records_corrections_and_analysis_reads_it(tmp_path):
+    import json as _json
+    from analysis_utils import prepare_dataframe
+
+    log = tmp_path / "adam.jsonl"
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    psyche = FakePsyche(
+        decisions=[{"verb": "examine", "target": "walls"}, {"verb": "eat", "target": "fridge"}],
+        impulses=[{"verb": "take", "target": "moon", "urgency": 0.9}, {"verb": "go", "target": "north", "urgency": 0.6}],
+    )
+    brain = CognitiveLoop(str(log), LOG_HEADERS, psyche=psyche)
+    brain.step(world)
+    brain.step(world)
+    rows = [_json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 2
+    first = rows[0]
+    assert isinstance(first["action_result"], dict) and isinstance(first["impulses"], list)  # real objects, not strings
+    assert first["dropped_impulses"][0]["target"] == "moon" and "moon" in first["dropped_impulses"][0]["reason"]
+    assert first["rejected_decision"]["target"] == "walls"
+    assert rows[1]["rejected_decision"] is None
+    df = prepare_dataframe(str(log))
+    assert df["chosen_verb"].tolist() == ["go", "eat"]
+    assert df["action_success"].tolist() == [1.0, 1.0]  # went north, then ate from the kitchen fridge
+    assert "frustration" in df.columns
+
+
+def test_csv_log_still_supported(tmp_path):
+    from analysis_utils import prepare_dataframe
+
+    log = tmp_path / "adam.csv"
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = CognitiveLoop(str(log), LOG_HEADERS, psyche=FakePsyche(decisions=[{"verb": "go", "target": "north"}]))
+    brain.step(world)
+    header = log.read_text().splitlines()[0]
+    assert header == ",".join(LOG_HEADERS)  # JSONL-only fields are not added as CSV columns
+    df = prepare_dataframe(str(log))
+    assert df["chosen_verb"].tolist() == ["go"] and df["action_result_parsed"][0]["success"] is True

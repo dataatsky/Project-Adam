@@ -18,6 +18,8 @@ from prometheus_client import Counter as PmCounter, Histogram, generate_latest, 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 import config
+from moods import MOODS, normalize_mood
+from personality import describe as describe_personality
 from text_world import VERBS, normalize_verb
 
 
@@ -51,9 +53,14 @@ class Action(BaseModel):
 
 
 class EmotionalShift(BaseModel):
-    mood: str = Field(default="neutral")
+    mood: Literal[MOODS] = "neutral"  # JSON-schema enum: one label per feeling
     level_delta: float = 0.0
     reason: str = ""
+
+    @field_validator("mood", mode="before")
+    @classmethod
+    def _canonical_mood(cls, v):
+        return normalize_mood(v, default="neutral")
 
 
 class Impulse(Action):
@@ -151,7 +158,7 @@ T = TypeVar("T", bound=BaseModel)
 def _structured(prompt: str, response_model: Type[T], endpoint: str, seed: Optional[int] = None) -> T:
     """Ask Ollama for JSON matching `response_model`, re-asking with the error if it doesn't validate."""
     messages = [{"role": "user", "content": prompt}]
-    options = {"num_predict": config.OLLAMA_MAX_TOKENS}
+    options = {"num_predict": config.OLLAMA_MAX_TOKENS, "num_ctx": config.OLLAMA_NUM_CTX}
     if seed is not None:
         options["seed"] = seed
     last_error: Optional[Exception] = None
@@ -242,7 +249,10 @@ def _pad_outcomes(req: ImagineBatchRequest, out: ImagineBatchResponse) -> Imagin
 def generate_impulse():
     return _handle(
         "generate_impulse", GenerateImpulseRequest, GenerateImpulseResponse,
-        render=lambda req: render_template('subconscious.j2', verbs=VERBS, **req.model_dump()),
+        render=lambda req: render_template(
+            'subconscious.j2', verbs=VERBS, moods=MOODS,
+            temperament=describe_personality(req.current_state.get('personality')), **req.model_dump(),
+        ),
         fallback=lambda req: {
             "emotional_shift": {"mood": "neutral", "level_delta": 0, "reason": "fallback"},
             "impulses": [{"verb": "wait", "target": None, "drive": "safety", "urgency": 0.1}],
@@ -278,6 +288,7 @@ def reflect():
         return render_template(
             'conscious_mind.j2',
             verbs=VERBS,
+            temperament=describe_personality(data['current_state'].get('personality')),
             current_state=data['current_state'],
             world_state=data['world_state'],
             recent_memories=data['recent_memories'],

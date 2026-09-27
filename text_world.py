@@ -4,6 +4,7 @@ import re
 from typing import Dict, List, Optional, Tuple, Any
 
 from grid_map import GridMap
+from moods import normalize_mood
 from sensory import SensoryCortex
 
 # Canonical action vocabulary. The psyche prompts, the psyche response schema
@@ -201,7 +202,7 @@ class TextWorld:
             "visited": {pos},
             "inventory": list(kwargs.get("inventory", [])),
             "hunger": float(kwargs.get("hunger", 0.25)),
-            "mood": kwargs.get("mood", "neutral"),
+            "mood": normalize_mood(kwargs.get("mood"), default="neutral"),
             "mood_intensity": float(kwargs.get("mood_intensity", 0.4)),
             "active_goal": None,
             "goal_progress_index": 0,
@@ -376,6 +377,9 @@ class TextWorld:
         self.lighting = world_cfg.get("lighting", self.lighting)
         self.temperature = float(world_cfg.get("temperature", self.temperature))
         self.noise_level = float(world_cfg.get("noise", self.noise_level))
+        if world_cfg.get("neighbor_awaiting_help"):
+            self.neighbor_state.update({"awaiting_help": True, "last_visit": 0, "request_cycle": 0})
+            self.relationships["neighbor"]["last_request"] = 0
 
         # 1. Rooms
         coord_objects = layout.get("objects", {})
@@ -527,7 +531,7 @@ class TextWorld:
             self.relationships["neighbor"]["last_request"] = self.world_time
 
         req_cycle = self.neighbor_state.get("request_cycle")
-        if self.neighbor_state.get("awaiting_help") and req_cycle:
+        if self.neighbor_state.get("awaiting_help") and req_cycle is not None:
             if self.world_time - req_cycle > 5:
                 self.relationships["neighbor"]["trust"] = max(0.1, self.relationships["neighbor"].get("trust", 0.5) - 0.05)
                 self.neighbor_state["request_cycle"] = self.world_time
@@ -634,8 +638,7 @@ class TextWorld:
         agent = self.agents.get(agent_id)
         if not agent:
             return
-        if mood:
-            agent["mood"] = mood
+        agent["mood"] = normalize_mood(mood, default=agent["mood"])
         try:
             delta = float(level_delta or 0.0)
         except (TypeError, ValueError):

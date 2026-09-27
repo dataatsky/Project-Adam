@@ -213,3 +213,8 @@ chroma/
 # macOS / local UI state
 .DS_Store
 .psyche_ui.json
+
+# Behaviour logs (JSONL)
+adam_behavior_log.jsonl
+benchmark_log.jsonl
+personality_log.jsonl
