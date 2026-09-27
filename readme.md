@@ -67,7 +67,7 @@ Two areas are **experimental** and kept separate from the core:
 
 | Component                | File                    | Role                                                                             |
 | ------------------------ | ----------------------- | -------------------------------------------------------------------------------- |
-| **Text World**           | `text_world.py`         | Adam’s environment: 2D grid, objects, doors, tool use, and the **verb registry**. Owns Adam’s body/mind state (hunger, mood, goal, inventory). |
+| **Text World**           | `text_world.py`, `world/` | Adam’s environment: 2D grid, objects, doors, tool use. Owns every agent’s body/mind state (needs, mood, goal, inventory). `world/vocab.py` holds the **verb registry**, `world/actions.py` what each verb does, `world/content.py` the room templates and need rates. |
 | **Sensory Cortex**       | `sensory.py`            | Translates raw data (temp, noise) into qualitative "qualia" strings ("It feels bone-chilling"). |
 | **Psyche-LLM**           | `psyche_ollama.py`      | Adam’s subconscious: Jinja2 templates + Ollama structured outputs validated by Pydantic. |
 | **Memory**               | `services/memory_store.py` | Sentence embeddings in Chroma (default) or Pinecone for long-term recall.   |
@@ -352,11 +352,11 @@ Both minds share two partials, so they always see the same world and follow the 
 * `templates/_guidance.j2`: how Adam acts (serve needs and goals, explore, open containers, talk to people, don't wait or repeat), plus a warning built from the actions he has repeated recently.
 
 ### World Generation
-Modify `text_world.py` to add new Room Templates or change the procedural generation logic in `_generate_layout`.
+Add room templates in `world/content.py`, or change the procedural generation in `TextWorld._generate_layout` (`text_world.py`).
 
 ### New Actions
-1. **Vocabulary**: Add the verb and a one-line description to `VERBS` in `text_world.py` (and any phrasings to `VERB_ALIASES`).
-2. **Physics**: Add an `_act_<verb>` handler to `TextWorld`.
+1. **Vocabulary**: Add the verb and a one-line description to `VERBS` in `world/vocab.py` (and any phrasings to `VERB_ALIASES`).
+2. **Physics**: Add an `_act_<verb>` handler to `ActionHandlers` in `world/actions.py`.
 
 The prompts, the psyche schema, and action validation all pick the new verb up automatically.
 

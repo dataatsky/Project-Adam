@@ -225,8 +225,8 @@ Run `pytest tests/test_scenarios.py` to check the new scenario before benchmarki
 *   **Inner voice**: edit `templates/subconscious.j2` (e.g. "a nervous, paranoid survivalist") and restart `psyche_ollama.py`.
 
 ### 4. Adding New Tools/Physics
-1.  **Register the Verb**: Add `"paint": "paint an object"` to `VERBS` in `text_world.py`.
-2.  **Define the Physics**: Add the handler to `TextWorld`:
+1.  **Register the Verb**: Add `"paint": "paint an object"` to `VERBS` in `world/vocab.py`.
+2.  **Define the Physics**: Add the handler to `ActionHandlers` in `world/actions.py`:
     ```python
     def _act_paint(self, target, obj, props, state, agent, **kwargs):
         if "paintable" in props:
