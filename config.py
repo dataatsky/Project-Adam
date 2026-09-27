@@ -65,6 +65,8 @@ CYCLE_SLEEP = float(os.getenv("CYCLE_SLEEP", "5"))
 IMAGINE_TOP_K = int(os.getenv("IMAGINE_TOP_K", "3"))
 # Ask the LLM to predict each candidate action's outcome (the world simulation always runs)
 IMAGINE_WITH_LLM = os.getenv("IMAGINE_WITH_LLM", "1") not in {"0", "false", "False", ""}
+# Store each cycle's exact prompts and raw LLM replies in the JSONL log (large; for debugging prompts)
+TRACE_PROMPTS = os.getenv("TRACE_PROMPTS", "0") not in {"0", "false", "False", ""}
 # Re-model a silent agent's mind at most every N cycles (always when they speak)
 TOM_INTERVAL = int(os.getenv("TOM_INTERVAL", "5"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

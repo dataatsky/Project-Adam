@@ -52,7 +52,7 @@ class FakePsyche:
         imps = self.impulses or [{**decision, "urgency": 0.8, "drive": "need"}]
         return {"emotional_shift": self.shift, "impulses": imps}
 
-    def imagine_batch(self, actions, seed=None):
+    def imagine_batch(self, actions, seed=None, trace=False):
         return {"outcomes": ["imagined"] * len(actions)}
 
     def reflect(self, payload):
@@ -64,7 +64,7 @@ class FakePsyche:
         self.tom_calls.append(kwargs)
         return {"beliefs": ["b"], "predicted_goal": "g", "trust_level": 0.5, "potential_threat": False}
 
-    def consolidate(self, memories, seed=None):
+    def consolidate(self, memories, seed=None, trace=False):
         return {"insight": "insight"}
 
 
@@ -200,7 +200,7 @@ class StatelessHungerPsyche(FakePsyche):
         action = {"verb": "eat", "target": "fridge"} if here == "kitchen" else {"verb": "go", "target": "north"}
         return {"emotional_shift": {}, "impulses": [{**action, "urgency": 0.9}]}
 
-    def imagine_batch(self, actions, seed=None):
+    def imagine_batch(self, actions, seed=None, trace=False):
         raise AssertionError("LLM imagination should be skipped")
 
     def reflect(self, payload):
@@ -329,7 +329,7 @@ def test_every_llm_call_is_seeded_and_counted(brain_factory):
     class RecordingPsyche(FakePsyche):
         seeds = []
 
-        def imagine_batch(self, actions, seed=None):
+        def imagine_batch(self, actions, seed=None, trace=False):
             self.seeds.append(("imagine", seed))
             return {"outcomes": ["x"] * len(actions)}
 
@@ -385,3 +385,37 @@ def test_csv_log_still_supported(tmp_path):
     assert header == ",".join(LOG_HEADERS)  # JSONL-only fields are not added as CSV columns
     df = prepare_dataframe(str(log))
     assert df["chosen_verb"].tolist() == ["go"] and df["action_result_parsed"][0]["success"] is True
+
+
+def test_trace_is_logged_with_the_cycle(tmp_path):
+    import json as _json
+
+    class TracingPsyche(FakePsyche):
+        def generate_impulse(self, payload):
+            assert payload["trace"] is True
+            out = super().generate_impulse(payload)
+            return {**out, "_trace": {"prompt": "impulse prompt", "replies": ["{...}"]}}
+
+        def reflect(self, payload):
+            return {**super().reflect(payload), "_trace": {"prompt": "reflect prompt", "replies": ["{...}"]}}
+
+    log = tmp_path / "t.jsonl"
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = CognitiveLoop(str(log), LOG_HEADERS, psyche=TracingPsyche(decisions=[{"verb": "go", "target": "north"}]))
+    brain.trace = True
+    brain.step(world)
+    record = _json.loads(log.read_text().splitlines()[0])
+    assert [t["endpoint"] for t in record["trace"]] == ["generate_impulse", "reflect"]
+    assert record["trace"][1]["prompt"] == "reflect prompt"
+    assert "_trace" not in record["emotional_delta"]
+
+
+def test_no_trace_field_by_default(tmp_path):
+    import json as _json
+
+    log = tmp_path / "t.jsonl"
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = CognitiveLoop(str(log), LOG_HEADERS, psyche=FakePsyche())
+    brain.trace = False
+    brain.step(world)
+    assert "trace" not in _json.loads(log.read_text().splitlines()[0])

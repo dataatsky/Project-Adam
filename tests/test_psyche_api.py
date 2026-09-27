@@ -14,7 +14,7 @@ def calls():
 def client(monkeypatch, calls):
     """Replace the Ollama call with canned, schema-valid replies."""
 
-    def fake_structured(prompt, response_model, endpoint, seed=None):
+    def fake_structured(prompt, response_model, endpoint, seed=None, transcript=None):
         calls.append((endpoint, prompt))
         if response_model is appmod.GenerateImpulseResponse:
             return appmod.GenerateImpulseResponse(
@@ -213,7 +213,7 @@ def test_seed_reaches_every_endpoint(client, calls, monkeypatch):
     seen = []
     original = appmod._structured
 
-    def spy(prompt, response_model, endpoint, seed=None):
+    def spy(prompt, response_model, endpoint, seed=None, transcript=None):
         seen.append((endpoint, seed))
         return original(prompt, response_model, endpoint, seed)
 
@@ -232,3 +232,24 @@ def test_mood_schema_is_a_fixed_vocabulary():
     assert appmod.EmotionalShift(mood="Curiosity").mood == "curious"
     assert appmod.EmotionalShift(mood="resolute").mood == "determined"
     assert appmod.EmotionalShift(mood="flabbergasted").mood == "neutral"  # unknown -> neutral, never a crash
+
+
+def test_trace_returns_prompt_and_every_raw_reply(monkeypatch):
+    replies = iter(['{"outcome": 5}', '{"outcome": "The fridge opens."}'])
+
+    class Msg:
+        def __init__(self, content):
+            self.message = type("M", (), {"content": content})()
+            self.done_reason = "stop"
+
+    monkeypatch.setattr(appmod.client, "chat", lambda **kw: Msg(next(replies)))
+    client = appmod.app.test_client()
+    data = client.post("/imagine", json={"action": {"verb": "open", "target": "fridge"}, "trace": True}).get_json()
+    assert data["outcome"] == "The fridge opens."
+    assert "I will open the fridge" in data["_trace"]["prompt"]
+    assert data["_trace"]["replies"] == ['{"outcome": 5}', '{"outcome": "The fridge opens."}']  # the retry is visible
+
+
+def test_no_trace_unless_asked(client):
+    data = client.post("/imagine", json={"action": {"verb": "wait"}}).get_json()
+    assert "_trace" not in data

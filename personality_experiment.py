@@ -28,7 +28,7 @@ from services.psyche_client import PsycheClient
 from text_world import TextWorld
 
 
-def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_file: str) -> dict:
+def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_file: str, trace: bool = False) -> dict:
     """One goal-free episode in the seeded default world; returns the steps taken and their metrics."""
     status = copy.deepcopy(config.AGENT_STATUS)
     status["personality"] = dict(PRESETS[preset])
@@ -37,6 +37,7 @@ def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_fil
                           initial_status=status)
     brain.imagine_with_llm = False
     brain.llm_seed = seed
+    brain.trace = trace or brain.trace
     world = TextWorld(seed=seed)
     brain.attach_world(world)
     steps = []
@@ -53,7 +54,7 @@ def run_personality_episode(preset: str, seed: int, cycles: int, psyche, log_fil
 
 
 def run_experiment(presets, runs=5, cycles=15, parallel=1, seed=0, psyche=None,
-                   log_file="personality_log.jsonl", results_path=DEFAULT_RESULTS):
+                   log_file="personality_log.jsonl", results_path=DEFAULT_RESULTS, trace=False):
     unknown = [p for p in presets if p not in PRESETS]
     if unknown:
         raise SystemExit(f"Unknown preset(s) {unknown}; choose from {sorted(PRESETS)}")
@@ -66,7 +67,7 @@ def run_experiment(presets, runs=5, cycles=15, parallel=1, seed=0, psyche=None,
     started = time.time()
     episodes = []
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        futures = [pool.submit(run_personality_episode, p, seed + i, cycles, psyche, log_file)
+        futures = [pool.submit(run_personality_episode, p, seed + i, cycles, psyche, log_file, trace)
                    for p in presets for i in range(runs)]
         for future in as_completed(futures):
             try:
@@ -106,5 +107,6 @@ if __name__ == "__main__":
     parser.add_argument("--cycles", type=int, default=15, help="Cycles per episode (default 15)")
     parser.add_argument("--seed", type=int, default=0, help="Base seed; episode i uses seed+i (same worlds for every preset)")
     parser.add_argument("--parallel", type=int, default=1, help="Episodes to run at once (needs OLLAMA_NUM_PARALLEL >= this)")
+    parser.add_argument("--trace", action="store_true", help="Log each cycle's prompts and raw LLM replies (large)")
     args = parser.parse_args()
-    run_experiment(args.presets, runs=args.runs, cycles=args.cycles, parallel=args.parallel, seed=args.seed)
+    run_experiment(args.presets, runs=args.runs, cycles=args.cycles, parallel=args.parallel, seed=args.seed, trace=args.trace)

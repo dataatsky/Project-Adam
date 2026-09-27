@@ -68,7 +68,13 @@ class Impulse(Action):
     urgency: float = 0.0
 
 
-class GenerateImpulseRequest(BaseModel):
+class CallOptions(BaseModel):
+    """Options every endpoint accepts."""
+    seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
+    trace: bool = False  # return the exact prompt and raw model replies under "_trace"
+
+
+class GenerateImpulseRequest(CallOptions):
     current_state: Dict[str, Any]
     world_state: Dict[str, Any]
     resonant_memories: List[str] = []
@@ -76,7 +82,6 @@ class GenerateImpulseRequest(BaseModel):
     mastered_skills: List[str] = []
     repetitions: List[str] = []
     waiting: Optional[str] = None
-    seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
 
@@ -85,25 +90,23 @@ class GenerateImpulseResponse(BaseModel):
     impulses: List[Impulse]
 
 
-class ImagineRequest(BaseModel):
+class ImagineRequest(CallOptions):
     action: Action
-    seed: Optional[int] = None
 
 
 class ImagineResponse(BaseModel):
     outcome: str
 
 
-class ImagineBatchRequest(BaseModel):
+class ImagineBatchRequest(CallOptions):
     actions: List[Action]
-    seed: Optional[int] = None
 
 
 class ImagineBatchResponse(BaseModel):
     outcomes: List[str]
 
 
-class ReflectRequest(BaseModel):
+class ReflectRequest(CallOptions):
     current_state: Dict[str, Any]
     world_state: Dict[str, Any] = {}
     hypothetical_outcomes: List[Dict[str, Any]]
@@ -111,7 +114,6 @@ class ReflectRequest(BaseModel):
     resonant_memories: List[str] = []  # long-term memories recalled this cycle (same as the impulse call)
     repetitions: List[str] = []
     waiting: Optional[str] = None
-    seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
 
@@ -125,21 +127,19 @@ class ReflectResponse(BaseModel):
     new_goal_plan: Optional[List[str]] = None # List of "verb target" sub-steps
 
 
-class ConsolidateRequest(BaseModel):
+class ConsolidateRequest(CallOptions):
     recent_memories: List[str]
-    seed: Optional[int] = None
 
 
 class ConsolidateResponse(BaseModel):
     insight: str
 
 
-class ToMRequest(BaseModel):
+class ToMRequest(CallOptions):
     other_agent_id: str
     environment_desc: str
     recent_actions: str
     relationship_context: str
-    seed: Optional[int] = None
 
 
 class ToMResponse(BaseModel):
@@ -156,8 +156,11 @@ client = ollama.Client(host=config.OLLAMA_HOST, timeout=config.OLLAMA_TIMEOUT)
 T = TypeVar("T", bound=BaseModel)
 
 
-def _structured(prompt: str, response_model: Type[T], endpoint: str, seed: Optional[int] = None) -> T:
-    """Ask Ollama for JSON matching `response_model`, re-asking with the error if it doesn't validate."""
+def _structured(prompt: str, response_model: Type[T], endpoint: str, seed: Optional[int] = None,
+                transcript: Optional[List[str]] = None) -> T:
+    """Ask Ollama for JSON matching `response_model`, re-asking with the error if it doesn't validate.
+
+    Every raw reply (including invalid ones that were re-asked) is appended to `transcript` if given."""
     messages = [{"role": "user", "content": prompt}]
     options = {"num_predict": config.OLLAMA_MAX_TOKENS, "num_ctx": config.OLLAMA_NUM_CTX}
     if seed is not None:
@@ -172,6 +175,8 @@ def _structured(prompt: str, response_model: Type[T], endpoint: str, seed: Optio
             options=options,
         )
         content = resp.message.content or ""
+        if transcript is not None:
+            transcript.append(content)
         if getattr(resp, "done_reason", None) == "length":
             log.warning(f"/{endpoint}: reply hit OLLAMA_MAX_TOKENS={config.OLLAMA_MAX_TOKENS} and was cut off")
         try:
@@ -207,17 +212,24 @@ def _handle(
         except ValidationError as ve:
             REQS.labels(endpoint, "400").inc()
             return jsonify({"error": "invalid payload", "details": json.loads(ve.json())}), 400
+        prompt, replies = None, []
+
+        def trace(extra=None):
+            if not req.trace:
+                return {}
+            return {"_trace": {"prompt": prompt, "replies": replies, **(extra or {})}}
+
         try:
             prompt = re.sub(r"\n{3,}", "\n\n", render(req))  # empty template sections leave blank runs
-            out = _structured(prompt, response_model, endpoint, seed=getattr(req, "seed", None))
+            out = _structured(prompt, response_model, endpoint, seed=req.seed, transcript=replies)
             if post:
                 out = post(req, out)
             REQS.labels(endpoint, "200").inc()
-            return jsonify(out.model_dump())
+            return jsonify({**out.model_dump(), **trace()})
         except Exception as e:
             log.warning(f"/{endpoint} failed: {e}")
             REQS.labels(endpoint, "500").inc()
-            return jsonify({**fallback(req), "psyche_fallback": True}), 200
+            return jsonify({**fallback(req), "psyche_fallback": True, **trace({"error": str(e)})}), 200
     finally:
         LAT.labels(endpoint).observe(time.time() - t0)
 
@@ -320,7 +332,7 @@ def consolidate():
 def theory_of_mind():
     return _handle(
         "theory_of_mind", ToMRequest, ToMResponse,
-        render=lambda req: render_template('theory_of_mind.j2', **req.model_dump(exclude={"seed"})),
+        render=lambda req: render_template('theory_of_mind.j2', **req.model_dump(exclude={"seed", "trace"})),
         fallback=lambda req: {
             "agent_id": req.other_agent_id,
             "predicted_goal": "unknown",

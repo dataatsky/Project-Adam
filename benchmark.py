@@ -55,7 +55,7 @@ def default_memory_factory(directory: str):
     )
 
 
-def _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=None, tag_suffix=""):
+def _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=None, tag_suffix="", trace=False):
     brain = CognitiveLoop(
         log_filename=log_file,
         log_headers=LOG_HEADERS,
@@ -67,13 +67,14 @@ def _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=None,
     )
     brain.imagine_with_llm = imagine_with_llm
     brain.llm_seed = seed
+    brain.trace = trace or brain.trace
     episode = run_episode(scenario, lambda world, _cycle: brain.step(world), seed=seed)
     if memory is not None and hasattr(memory, "flush"):
         memory.flush()
     return episode, brain
 
 
-def _run_one(name, scenario, run_idx, psyche, log_file, imagine_with_llm, seed, memory_factory=None):
+def _run_one(name, scenario, run_idx, psyche, log_file, imagine_with_llm, seed, memory_factory=None, trace=False):
     t0 = time.time()
     stats = Counter()
     extra = {}
@@ -83,15 +84,16 @@ def _run_one(name, scenario, run_idx, psyche, log_file, imagine_with_llm, seed, 
             with tempfile.TemporaryDirectory(prefix="adam-memory-") as tmp:
                 store = (memory_factory or default_memory_factory)(tmp)
                 learn, brain = _play(name, {**scenario, **training}, psyche, log_file, imagine_with_llm, seed,
-                                     memory=store, tag_suffix="_training")
+                                     memory=store, tag_suffix="_training", trace=trace)
                 stats += brain.stats
-                episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=store)
+                episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, memory=store, trace=trace)
                 stats += brain.stats
-            control, brain_c = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, tag_suffix="_no_memory")
+            control, brain_c = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, tag_suffix="_no_memory",
+                                     trace=trace)
             stats += brain_c.stats
             extra = {"training": learn["outcome"], "without_memory": control["outcome"]}
         else:
-            episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed)
+            episode, brain = _play(name, scenario, psyche, log_file, imagine_with_llm, seed, trace=trace)
             stats += brain.stats
         outcome, cycles = episode["outcome"], episode["cycles"]
     except Exception as e:
@@ -106,7 +108,7 @@ def _rate(part, whole):
 
 
 def run_benchmark(names, runs=5, parallel=1, imagine_with_llm=False, psyche=None, log_file="benchmark_log.jsonl", seed=0,
-                  results_path=DEFAULT_RESULTS, memory_factory=None):
+                  results_path=DEFAULT_RESULTS, memory_factory=None, trace=False):
     """Run every (scenario, run) pair, `parallel` at a time. Returns {scenario: success rate %}."""
     if isinstance(names, str):
         names = [names]
@@ -133,7 +135,7 @@ def run_benchmark(names, runs=5, parallel=1, imagine_with_llm=False, psyche=None
     results = []
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [
-            pool.submit(_run_one, name, scenarios[name], i, psyche, log_file, imagine_with_llm, seed + i, memory_factory)
+            pool.submit(_run_one, name, scenarios[name], i, psyche, log_file, imagine_with_llm, seed + i, memory_factory, trace)
             for name, i in jobs
         ]
         for future in as_completed(futures):
@@ -215,6 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("--imagine", action="store_true", help="Also ask the LLM to imagine each option (slower)")
     parser.add_argument("--results", default=DEFAULT_RESULTS, help="Results history file (JSON lines)")
     parser.add_argument("--history", action="store_true", help="Show past results instead of running")
+    parser.add_argument("--trace", action="store_true", help="Log each cycle's prompts and raw LLM replies (large)")
     args = parser.parse_args()
 
     if args.history:
@@ -229,4 +232,4 @@ if __name__ == "__main__":
     else:
         names = [args.scenario]
     run_benchmark(names, runs=args.runs, parallel=args.parallel, imagine_with_llm=args.imagine, seed=args.seed,
-                  results_path=args.results)
+                  results_path=args.results, trace=args.trace)

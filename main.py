@@ -17,6 +17,7 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--headless", action="store_true", help="Run without Tkinter UI")
     parser.add_argument("--api-port", type=int, default=8080, help="Flask API port (default: 8080)")
     parser.add_argument("--cycles", type=int, default=0, help="Headless: stop after N cycles (0 = run forever)")
+    parser.add_argument("--trace", action="store_true", help="Log each cycle's prompts and raw LLM replies (large)")
     args = parser.parse_args(argv)
 
     # Configure logging before anything starts, so startup and first-cycle records aren't lost
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None):
     if args.headless:
         ui = None
         brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=ui, memory=memory_store, psyche=psyche)
+        brain.trace = args.trace or brain.trace
         security = get_runtime(brain, psyche)
         if getattr(security, "enabled", False):
             brain.attach_security(security)
@@ -102,6 +104,7 @@ def main(argv: list[str] | None = None):
 
         # Start cognitive loop
         brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=app_gui, memory=memory_store, psyche=psyche)
+        brain.trace = args.trace or brain.trace
         security = get_runtime(brain, psyche)
         if getattr(security, "enabled", False):
             brain.attach_security(security)

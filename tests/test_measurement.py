@@ -23,7 +23,7 @@ def test_temperament_reaches_both_prompts_in_the_shared_prefix(monkeypatch):
     import psyche_ollama as appmod
 
     prompts = []
-    monkeypatch.setattr(appmod, "_structured", lambda p, m, e, seed=None: prompts.append(p) or m.model_validate(
+    monkeypatch.setattr(appmod, "_structured", lambda p, m, e, seed=None, transcript=None: prompts.append(p) or m.model_validate(
         {"emotional_shift": {}, "impulses": []} if m is appmod.GenerateImpulseResponse
         else {"final_action": {"verb": "wait"}, "reasoning": "ok"}))
     client = appmod.app.test_client()
@@ -216,7 +216,7 @@ def test_recalled_memories_are_in_the_shared_prompt_prefix(monkeypatch):
     import psyche_ollama as appmod
 
     prompts = []
-    monkeypatch.setattr(appmod, "_structured", lambda p, m, e, seed=None: prompts.append(p) or m.model_validate(
+    monkeypatch.setattr(appmod, "_structured", lambda p, m, e, seed=None, transcript=None: prompts.append(p) or m.model_validate(
         {"emotional_shift": {}, "impulses": []} if m is appmod.GenerateImpulseResponse
         else {"final_action": {"verb": "wait"}, "reasoning": "ok"}))
     client = appmod.app.test_client()

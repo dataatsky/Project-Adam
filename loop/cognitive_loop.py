@@ -73,6 +73,9 @@ class CognitiveLoop:
         # What the plumbing corrected this cycle (logged with the cycle record)
         self._cycle_dropped: list[dict] = []
         self._cycle_rejected: Optional[dict] = None
+        # Exact prompts and raw LLM replies of this cycle, when tracing is on
+        self.trace = bool(getattr(config, "TRACE_PROMPTS", False))
+        self._cycle_trace: list[dict] = []
         # Plumbing health, reported by benchmark.py: how often the LLM's output had to be corrected or replaced
         self.stats: Counter = Counter()
         self._goal_completed_by_reflection = False
@@ -230,13 +233,12 @@ class CognitiveLoop:
             "repetitions": self._repetitions(),
             "waiting": self._waiting(),
         }
-        if self._seed() is not None:
-            payload["seed"] = self._seed()
+        payload.update(self._call_options())
         if self.security:
             payload = self.security.before_psyche("generate_impulse", payload)
         impulses = None
         if self.psyche:
-            impulses = self.psyche.generate_impulse(payload)
+            impulses = self._keep_trace("generate_impulse", self.psyche.generate_impulse(payload))
             self._count_call(impulses)
         if self.security:
             impulses = impulses or {}
@@ -291,8 +293,9 @@ class CognitiveLoop:
                 environment_desc=self.current_world_state.get("agent_location", "unknown"),
                 recent_actions="; ".join(said) or f"{other} is standing here silently.",
                 relationship_context=cached["insight"] if cached else "We have not interacted before.",
-                seed=self._seed(),
+                **self._call_options(),
             )
+            tom = self._keep_trace("theory_of_mind", tom)
             if self._count_call(tom):
                 insight = f"ToM({other}): Beliefs={tom.get('beliefs')}, Goal={tom.get('predicted_goal')}, Trust={tom.get('trust_level')}, Threat={tom.get('potential_threat')}"
                 self.tom_cache[other] = {"cycle": self.cycle_counter, "insight": insight}
@@ -313,7 +316,7 @@ class CognitiveLoop:
         if not self.imagine_with_llm:
             imagined_results = [None] * len(actions_to_imagine)
         elif self.psyche and actions_to_imagine:
-            batch = self.psyche.imagine_batch(actions_to_imagine, seed=self._seed())
+            batch = self._keep_trace("imagine_batch", self.psyche.imagine_batch(actions_to_imagine, **self._call_options()))
             imagined_results = batch.get("outcomes", []) if self._count_call(batch) else [None] * len(actions_to_imagine)
         else:
             imagined_results = ["My imagination is fuzzy." for _ in actions_to_imagine]
@@ -339,13 +342,12 @@ class CognitiveLoop:
             "repetitions": self._repetitions(),
             "waiting": self._waiting(),
         }
-        if self._seed() is not None:
-            payload["seed"] = self._seed()
+        payload.update(self._call_options())
         reflection = {"final_action": dict(WAIT_ACTION), "reasoning": "Mind is blank."}
         if self.psyche:
             if self.security:
                 payload = self.security.before_psyche("reflect", payload)
-            reflection = self.psyche.reflect(payload) or {**reflection, "psyche_fallback": True}
+            reflection = self._keep_trace("reflect", self.psyche.reflect(payload)) or {**reflection, "psyche_fallback": True}
             self._count_call(reflection)
             self.log.debug(f"Reflection: {reflection.get('reasoning')}")
             if reflection.get("thoughts_on_others") and tom_insights:
@@ -437,7 +439,7 @@ class CognitiveLoop:
             self.log.info("Agent is sleeping... Triggering memory consolidation.")
             try:
                 if self.psyche and hasattr(self.psyche, "consolidate"):
-                    dream = self.psyche.consolidate(self.recent_memories[-10:], seed=self._seed())
+                    dream = self._keep_trace("consolidate", self.psyche.consolidate(self.recent_memories[-10:], **self._call_options()))
                     insight = dream.get("insight") if self._count_call(dream) else None
                     if insight:
                         self.log.info(f"Consolidated Insight: {insight}")
@@ -508,6 +510,8 @@ class CognitiveLoop:
             "dropped_impulses": list(self._cycle_dropped),
             "rejected_decision": self._cycle_rejected,
         }
+        if self.trace:
+            cycle_data["trace"] = list(self._cycle_trace)
         self.log_cycle_data(cycle_data)
         self._ui_vitals()
         if result.get("success"):
@@ -534,7 +538,7 @@ class CognitiveLoop:
         if world is not self.world:
             self.attach_world(world)
         self.cycle_counter += 1
-        self._cycle_dropped, self._cycle_rejected = [], None
+        self._cycle_dropped, self._cycle_rejected, self._cycle_trace = [], None, []
         if self.security:
             self.security.before_cycle(self.cycle_counter)
         ws = world.get_world_state(agent_id=self.agent_id)
@@ -627,6 +631,21 @@ class CognitiveLoop:
         """Add to short-term memory (what the next reflection sees)."""
         self.recent_memories.append(text)
         del self.recent_memories[:-keep]
+
+    def _call_options(self) -> dict:
+        """Per-call options for the psyche: the cycle's seed, and tracing when enabled."""
+        options = {}
+        if self._seed() is not None:
+            options["seed"] = self._seed()
+        if self.trace:
+            options["trace"] = True
+        return options
+
+    def _keep_trace(self, endpoint: str, reply):
+        """Move a reply's "_trace" (prompt + raw LLM replies) into this cycle's trace."""
+        if isinstance(reply, dict) and "_trace" in reply:
+            self._cycle_trace.append({"endpoint": endpoint, **reply.pop("_trace")})
+        return reply
 
     def _seed(self) -> Optional[int]:
         """Per-cycle sampling seed for every LLM call (None when unseeded)."""

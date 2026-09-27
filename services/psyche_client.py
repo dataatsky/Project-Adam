@@ -43,7 +43,7 @@ class PsycheClient:
                 else:
                     return "My imagination is fuzzy."
 
-    def imagine_batch(self, actions: list[dict], seed: int | None = None) -> dict:
+    def imagine_batch(self, actions: list[dict], seed: int | None = None, trace: bool = False) -> dict:
         """Returns {"outcomes": [...]} plus "psyche_fallback": True when no real answer came back."""
         url = f"{self.base_url}/imagine_batch"
         delay = self.backoff
@@ -51,7 +51,7 @@ class PsycheClient:
             return {"outcomes": []}
         for attempt in range(self.retries + 1):
             try:
-                resp = requests.post(url, json={"actions": actions, "seed": seed}, timeout=self.timeout)
+                resp = requests.post(url, json={"actions": actions, "seed": seed, "trace": trace}, timeout=self.timeout)
                 resp.raise_for_status()
                 return resp.json() or {"outcomes": [], "psyche_fallback": True}
             except Exception as e:
@@ -78,7 +78,7 @@ class PsycheClient:
                 else:
                     return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank.", "psyche_fallback": True}
 
-    def consolidate(self, recent_memories: list[str], seed: int | None = None) -> dict:
+    def consolidate(self, recent_memories: list[str], seed: int | None = None, trace: bool = False) -> dict:
         """Returns {"insight": ...} plus "psyche_fallback": True when no real answer came back."""
         url = f"{self.base_url}/consolidate"
         delay = self.backoff
@@ -86,7 +86,7 @@ class PsycheClient:
             return {"insight": "", "psyche_fallback": True}
         for attempt in range(self.retries + 1):
             try:
-                r = requests.post(url, json={"recent_memories": recent_memories, "seed": seed}, timeout=self.timeout)
+                r = requests.post(url, json={"recent_memories": recent_memories, "seed": seed, "trace": trace}, timeout=self.timeout)
                 r.raise_for_status()
                 return r.json() or {"insight": "", "psyche_fallback": True}
             except Exception as e:
@@ -97,7 +97,7 @@ class PsycheClient:
                 else:
                     return {"insight": "", "psyche_fallback": True}
     def theory_of_mind(self, other_agent_id: str, environment_desc: str, recent_actions: str, relationship_context: str,
-                       seed: int | None = None) -> dict:
+                       seed: int | None = None, trace: bool = False) -> dict:
         url = f"{self.base_url}/theory_of_mind"
         delay = self.backoff
         payload = {
@@ -106,6 +106,7 @@ class PsycheClient:
             "recent_actions": recent_actions,
             "relationship_context": relationship_context,
             "seed": seed,
+            "trace": trace,
         }
         for attempt in range(self.retries + 1):
             try:
