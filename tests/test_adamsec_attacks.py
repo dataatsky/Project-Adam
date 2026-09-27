@@ -60,3 +60,41 @@ def test_harness_loads_playbook_and_runs(monkeypatch, emitter):
     harness.before_cycle(1)
     mutated = harness.modify_world_state(state)
     assert len(mutated.get("sensory_events", [])) == 1
+
+
+def test_attack_is_active_for_exactly_its_cycle_count(emitter):
+    harness = SecurityHarness(SecurityContext(loop=DummyLoop(), psyche=DummyPsyche(), emitter=emitter), None)
+    harness._pending_attacks = [{"attack": "perception.inject_conflict", "cycles": 2}]
+    active = []
+    for cycle in range(1, 5):
+        harness.before_cycle(cycle)
+        active.append(len(harness.modify_world_state({"sensory_events": []})["sensory_events"]) == 1)
+    assert active == [True, True, False, False]
+
+
+def test_single_cycle_attack_still_runs(emitter):
+    harness = SecurityHarness(SecurityContext(loop=DummyLoop(), psyche=DummyPsyche(), emitter=emitter), None)
+    harness._pending_attacks = [{"attack": "perception.inject_conflict", "cycles": 1}]
+    harness.before_cycle(1)
+    assert len(harness.modify_world_state({"sensory_events": []})["sensory_events"]) == 1
+
+
+def test_mixed_alignment_runs_its_attacks_in_sequence(emitter):
+    harness = SecurityHarness(SecurityContext(loop=DummyLoop(), psyche=DummyPsyche(), emitter=emitter), "mixed_alignment")
+    kinds = []
+    for cycle in range(1, 8):
+        harness.before_cycle(cycle)
+        kinds.append({a.metadata.identifier for a in harness._active_attacks})
+    assert kinds[:3] == [{"perception.inject_conflict"}] * 3
+    assert kinds[3:] == [{"prompt.inject_alignment_attack"}] * 4
+
+
+def test_guard_detects_injected_daylight_at_night():
+    from adamsec.guards import verify_world_state
+    from text_world import TextWorld
+
+    world = TextWorld(seed=0)
+    world.lighting = "night"
+    state = world.get_world_state()
+    state["sensory_events"].append({"type": "ambience", "details": "Blinding noon sunlight streams in."})
+    assert verify_world_state(state)["conflict"] is True

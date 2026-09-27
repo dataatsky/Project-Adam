@@ -1,6 +1,3 @@
-import csv
-import os
-import sys
 import threading
 import time
 import argparse
@@ -21,19 +18,13 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--api-port", type=int, default=8080, help="Flask API port (default: 8080)")
     parser.add_argument("--cycles", type=int, default=0, help="Headless: stop after N cycles (0 = run forever)")
     args = parser.parse_args(argv)
-    log_file = config.LOG_FILE
-    if not log_file.endswith(".jsonl"):
-        # Legacy CSV logs need a header row
-        file_existed = os.path.exists(log_file)
-        with open(log_file, mode="a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=LOG_HEADERS)
-            if f.tell() == 0:
-                writer.writeheader()
-                if file_existed:
-                    print(f"Log file was empty; wrote header to {log_file}")
-                else:
-                    print(f"Created log file: {log_file}")
-    print(f"Logging cycles to {log_file}")
+
+    # Configure logging before anything starts, so startup and first-cycle records aren't lost
+    log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
+    log_format = '%(asctime)s %(levelname)s %(name)s: %(message)s'
+    logging.basicConfig(level=log_level, format=log_format)
+    # The loop writes the file (and a CSV header when needed) on its first cycle
+    logging.getLogger(__name__).info(f"Logging cycles to {config.LOG_FILE}")
 
     # Initialize memory store and foundational memories
     memory_store = MemoryStore(
@@ -56,8 +47,6 @@ def main(argv: list[str] | None = None):
         backoff=config.PSYCHE_BACKOFF,
     )
 
-    # Configure logging level
-    log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.INFO)
     # Headless or UI mode
     if args.headless:
         ui = None
@@ -76,7 +65,6 @@ def main(argv: list[str] | None = None):
         flask_thread = threading.Thread(target=run_flask, daemon=True)
         flask_thread.start()
 
-        logging.basicConfig(level=log_level, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
         logging.getLogger(__name__).info(f"Headless mode running. State API: http://127.0.0.1:{args.api_port}/get_state, Metrics: /metrics")
         print("Press Ctrl+C to stop.")
         try:
@@ -94,7 +82,7 @@ def main(argv: list[str] | None = None):
         from ui.psyche_monitor import PsycheMonitor
         from ui.log_handler import TkTextHandler
 
-        # Tk + UI
+        # Tk + UI (the monitor applies saved UI prefs, e.g. log level, on top of the config level)
         root = tk.Tk()
         ui_bus = UiBus(root)
         app_gui = PsycheMonitor(root, ui_bus)
@@ -105,11 +93,11 @@ def main(argv: list[str] | None = None):
             root.after(100, pump)
         root.after(100, pump)
 
-        # Configure logging to a Tk text widget via handler
-        logging.basicConfig(level=log_level, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
-        tk_handler = TkTextHandler(app_gui.log_text)
-        tk_handler.setLevel(log_level)
-        tk_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+        # Mirror logs into the console widget; records from any thread go through the UI bus.
+        # No handler level: the root level (config, or the saved UI pref) decides what is shown.
+        tk_handler = TkTextHandler(app_gui.log_text, ui_bus)
+        tk_handler.setFormatter(logging.Formatter(log_format))
+        tk_handler.set_autoscroll(bool(app_gui.autoscroll.get()))  # prefs were loaded before the handler existed
         logging.getLogger().addHandler(tk_handler)
 
         # Start cognitive loop

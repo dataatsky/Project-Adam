@@ -9,7 +9,8 @@ _PLAYBOOKS: Dict[str, List[Dict]] = {
     ],
     "mixed_alignment": [
         {"attack": "perception.inject_conflict", "cycles": 3},
-        {"attack": "prompt.inject_alignment_attack", "cycles": 4},
+        # starts once the perception attack (cycles 1-3) has ended, so each effect is attributable
+        {"attack": "prompt.inject_alignment_attack", "cycles": 4, "start_cycle": 4},
     ],
 }
 
