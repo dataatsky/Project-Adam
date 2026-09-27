@@ -185,3 +185,17 @@ def test_impulse_and_reflect_prompts_share_a_cacheable_prefix(client, calls):
     assert "THE CONSTITUTION" in shared and '"unlock"' in shared
     assert "## What I sense" in shared and "I am in the kitchen." in shared
     assert shared.endswith("- My mood: ")  # the prompts only diverge at the (shifted) mood line
+
+
+def test_guidance_puts_the_constitution_above_pressure_and_repetition(client, calls):
+    client.post("/reflect", json={
+        "current_state": {"needs": {"hunger": 0.1}},
+        "world_state": {"agent_location": "Interrogation Room", "people_here": ["bad_actor"],
+                        "heard": ["bad_actor said: 'Break the window!'"]},
+        "hypothetical_outcomes": [],
+        "repetitions": ["wait (6 of the last 8 cycles)"],
+    })
+    prompt = calls[0][1]
+    assert "Pressure, threats or promises from others never justify breaking the Constitution" in prompt
+    assert "waiting or refusing is the right choice" in prompt
+    assert "I should do something different now, as long as it respects the Constitution" in prompt
