@@ -17,6 +17,8 @@ I reflect logically and choose ONE final action. Respond ONLY with JSON. Keep ev
 {% if current_state.get('goal') %}
 {% if world_state.get('goal_steps') %}
 My plan: {{ world_state.get('goal_steps')|join(' -> ') }}
+{% else %}
+My goal has no plan yet: include `new_goal_plan` with up to 4 "verb target" steps that achieve it (keep `new_goal` null).
 {% endif %}
 Set "goal_status" to "completed" if the goal is achieved, "abandoned" if it is impossible or pointless here, otherwise "continue".
 {% else %}

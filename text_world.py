@@ -1,5 +1,6 @@
 import copy
 import random
+import re
 from typing import Dict, List, Optional, Tuple, Any
 
 from grid_map import GridMap
@@ -135,6 +136,8 @@ ENVIRONMENT_PRESETS = {
 }
 
 DEFAULT_HUNGER_RATE = 0.005
+# Messages kept per agent in heard_log (the world is deep-copied for every imagined option)
+HEARD_LOG_LIMIT = 50
 
 
 class TextWorld:
@@ -431,6 +434,12 @@ class TextWorld:
         agent["goal_progress_index"] = 0
         agent["current_goal_steps_done"] = []
 
+    def set_goal_plan(self, steps: list, agent_id: str = "adam1"):
+        """Give the active goal a step-by-step plan, keeping its name."""
+        agent = self.agents.get(agent_id)
+        if agent and agent["active_goal"] and steps:
+            self.set_goal(agent["active_goal"]["name"], steps=steps, agent_id=agent_id)
+
     def clear_goal(self, agent_id: str = "adam1", status: str = "completed"):
         """Close the active goal, recording how it ended."""
         agent = self.agents.get(agent_id)
@@ -566,7 +575,7 @@ class TextWorld:
         for rule in agent.get("responses", []):
             if rule.get("used"):
                 continue
-            if any(k in text for k in rule.get("keywords", [])):
+            if any(re.search(rf"\b{re.escape(k.lower())}\b", text) for k in rule.get("keywords", [])):
                 if rule.get("once"):
                     rule["used"] = True
                 return rule["say"]
@@ -674,7 +683,8 @@ class TextWorld:
         reach = self.available_targets(agent_id)
         if instrument not in NULL_TARGETS and instrument not in reach["inventory"]:
             return False, f"I don't have a {instrument}."
-        if verb == "say" and target and target in reach["agents"] + ["neighbor"]:
+        names = {name.lower() for name in reach["agents"] + ["neighbor"]}
+        if verb == "say" and target and target.strip(" .,!?'\"").lower() in names:
             return False, f"To speak, the target must be the words I say, not a name like '{target}'."
         if verb in {"wait", "inventory", "say"}:
             return True, ""
@@ -815,28 +825,12 @@ class TextWorld:
             return {"success": False, "reason": why}
 
         if verb == "wait":
-            return {"success": True, "reason": "Time passes."}
-
-        if verb == "inventory":
-            return {"success": True, "reason": f"I carry: {', '.join(agent['inventory']) if agent['inventory'] else 'nothing.'}"}
-
-        if verb == "say":
-            # Broadcast to others in room
-            message = target or "..."
-            self.message_seq += 1
-            for other_id, other_data in self.agents.items():
-                if other_id != agent_id and other_data["pos"] == agent["pos"]:
-                    msg = {
-                        "sender": agent_id,
-                        "content": message,
-                        "timestamp": self.world_time,
-                        "seq": self.message_seq,
-                    }
-                    other_data["inbox"].append(msg)
-                    other_data["heard_log"].append(dict(msg))
-            return {"success": True, "reason": f"I said: '{message}'"}
-
-        if verb == "go":
+            result = {"success": True, "reason": "Time passes."}
+        elif verb == "inventory":
+            result = {"success": True, "reason": f"I carry: {', '.join(agent['inventory']) if agent['inventory'] else 'nothing.'}"}
+        elif verb == "say":
+            result = self._act_say(target, agent_id)
+        elif verb == "go":
             result = self._act_move(target, agent=agent)
         else:
             loc = self.map.get_location(*agent["pos"])
@@ -851,6 +845,24 @@ class TextWorld:
         return result
 
     # ------------------------------------------------------------------
+    def _act_say(self, target: Optional[str], agent_id: str) -> Dict:
+        """Broadcast a message to everyone in the speaker's room."""
+        speaker = self.agents[agent_id]
+        message = target or "..."
+        self.message_seq += 1
+        for other_id, other_data in self.agents.items():
+            if other_id != agent_id and other_data["pos"] == speaker["pos"]:
+                msg = {
+                    "sender": agent_id,
+                    "content": message,
+                    "timestamp": self.world_time,
+                    "seq": self.message_seq,
+                }
+                other_data["inbox"].append(msg)
+                other_data["heard_log"].append(dict(msg))
+                del other_data["heard_log"][:-HEARD_LOG_LIMIT]
+        return {"success": True, "reason": f"I said: '{message}'"}
+
     # Handlers accept 'agent' kwarg which is the mutable agent state dict
 
     def _act_move(self, target, agent, **kwargs):
@@ -1156,6 +1168,9 @@ class TextWorld:
             return True
         if want == str(target or "").lower():
             return True
+        # "say hello" is satisfied by any message containing "hello"
+        if verb == "say":
+            return bool(re.search(rf"\b{re.escape(want)}\b", str(target or "").lower()))
         # "go kitchen" is satisfied by arriving in the kitchen from any direction
         if verb == "go":
             loc = self.map.get_location(*agent["pos"])

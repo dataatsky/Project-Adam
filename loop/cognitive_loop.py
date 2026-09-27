@@ -209,17 +209,16 @@ class CognitiveLoop:
             "recent_diaries": [entry.get("text") for entry in self.diary_entries[-3:]],
             "mastered_skills": self.insight.get_mastered_skills() if self.insight else [],
             "repetitions": self._repetitions(),
+            "waiting": self._waiting(),
         }
-        if self.llm_seed is not None:
-            payload["seed"] = self.llm_seed * 1000 + self.cycle_counter
+        if self._seed() is not None:
+            payload["seed"] = self._seed()
         if self.security:
             payload = self.security.before_psyche("generate_impulse", payload)
         impulses = None
         if self.psyche:
             impulses = self.psyche.generate_impulse(payload)
-            self.stats["psyche_calls"] += 1
-            if not impulses or impulses.get("psyche_fallback"):
-                self.stats["psyche_fallbacks"] += 1
+            self._count_call(impulses)
         if self.security:
             impulses = impulses or {}
             self.security.after_psyche("generate_impulse", payload, impulses)
@@ -272,8 +271,9 @@ class CognitiveLoop:
                 environment_desc=self.current_world_state.get("agent_location", "unknown"),
                 recent_actions="; ".join(said) or f"{other} is standing here silently.",
                 relationship_context=cached["insight"] if cached else "We have not interacted before.",
+                seed=self._seed(),
             )
-            if tom:
+            if self._count_call(tom):
                 insight = f"ToM({other}): Beliefs={tom.get('beliefs')}, Goal={tom.get('predicted_goal')}, Trust={tom.get('trust_level')}, Threat={tom.get('potential_threat')}"
                 self.tom_cache[other] = {"cycle": self.cycle_counter, "insight": insight}
         return [self.tom_cache[o]["insight"] for o in present if o in self.tom_cache]
@@ -293,7 +293,8 @@ class CognitiveLoop:
         if not self.imagine_with_llm:
             imagined_results = [None] * len(actions_to_imagine)
         elif self.psyche and actions_to_imagine:
-            imagined_results = self.psyche.imagine_batch(actions_to_imagine)
+            batch = self.psyche.imagine_batch(actions_to_imagine, seed=self._seed())
+            imagined_results = batch.get("outcomes", []) if self._count_call(batch) else [None] * len(actions_to_imagine)
         else:
             imagined_results = ["My imagination is fuzzy." for _ in actions_to_imagine]
 
@@ -315,17 +316,16 @@ class CognitiveLoop:
             "hypothetical_outcomes": hypothetical,
             "recent_memories": self.recent_memories + tom_insights,
             "repetitions": self._repetitions(),
+            "waiting": self._waiting(),
         }
-        if self.llm_seed is not None:
-            payload["seed"] = self.llm_seed * 1000 + self.cycle_counter
+        if self._seed() is not None:
+            payload["seed"] = self._seed()
         reflection = {"final_action": dict(WAIT_ACTION), "reasoning": "Mind is blank."}
         if self.psyche:
             if self.security:
                 payload = self.security.before_psyche("reflect", payload)
             reflection = self.psyche.reflect(payload) or {**reflection, "psyche_fallback": True}
-            self.stats["psyche_calls"] += 1
-            if reflection.get("psyche_fallback"):
-                self.stats["psyche_fallbacks"] += 1
+            self._count_call(reflection)
             self.log.debug(f"Reflection: {reflection.get('reasoning')}")
             if reflection.get("thoughts_on_others") and tom_insights:
                 self.log.info(f"Theory of Mind: {reflection.get('thoughts_on_others')}")
@@ -347,10 +347,14 @@ class CognitiveLoop:
             self._goal_completed_by_reflection = status == "completed"
             world.clear_goal(self.agent_id, status=status)
         new_goal = reflection.get("new_goal")
+        steps = reflection.get("new_goal_plan")
         if new_goal and not agent["active_goal"]:
-            steps = reflection.get("new_goal_plan")
             self.log.info(f"Psyche proposed new goal: {new_goal} with plan: {steps}")
             world.set_goal(new_goal, steps=steps, agent_id=self.agent_id)
+        elif steps and agent["active_goal"] and not agent["active_goal"]["steps"]:
+            # A goal without a plan (e.g. given by a scenario) adopts the one Adam proposes
+            self.log.info(f"Plan for goal '{agent['active_goal']['name']}': {steps}")
+            world.set_goal_plan(steps, agent_id=self.agent_id)
 
     def _choose_action(self, reflection: dict, impulses: dict, world: TextWorld) -> tuple[dict, str]:
         """Take the reflected decision if the world can execute it; else the best grounded impulse."""
@@ -381,6 +385,9 @@ class CognitiveLoop:
     def act(self, world, action, reasoning, world_state, impulses):
         self._ui_status("Acting…")
         self.log.info("— 4. ACTING —")
+        agent = getattr(world, "agents", {}).get(self.agent_id) or {}
+        # A goal adopted in this cycle's reflection counts as active for this action
+        goal_active = bool(world_state.get("goal")) or bool(agent.get("active_goal"))
         result = world.process_action(action, agent_id=self.agent_id)
         self.log.debug(f"Result: {result}")
         # Narrative memory
@@ -408,7 +415,8 @@ class CognitiveLoop:
             self.log.info("Agent is sleeping... Triggering memory consolidation.")
             try:
                 if self.psyche and hasattr(self.psyche, "consolidate"):
-                    insight = self.psyche.consolidate(self.recent_memories[-10:])
+                    dream = self.psyche.consolidate(self.recent_memories[-10:], seed=self._seed())
+                    insight = dream.get("insight") if self._count_call(dream) else None
                     if insight:
                         self.log.info(f"Consolidated Insight: {insight}")
                         if self.memory:
@@ -425,7 +433,7 @@ class CognitiveLoop:
         self._goal_completed_by_reflection = False
         self.insight.add_cycle(
             action=action, success=bool(result.get('success')), impulses=imps, triggers=triggers, mood=self.current_mood,
-            goal_active=bool(world_state.get("goal")), goal_advanced=goal_advanced,
+            goal_active=goal_active, goal_advanced=goal_advanced,
         )
         kpis = self.insight.compute_kpis()
         imagined_texts = []
@@ -594,14 +602,35 @@ class CognitiveLoop:
         self.recent_memories.append(text)
         del self.recent_memories[:-keep]
 
+    def _seed(self) -> Optional[int]:
+        """Per-cycle sampling seed for every LLM call (None when unseeded)."""
+        return None if self.llm_seed is None else self.llm_seed * 1000 + self.cycle_counter
+
+    def _count_call(self, reply) -> bool:
+        """Record one LLM call; returns True if it produced a real (non-fallback) answer."""
+        self.stats["psyche_calls"] += 1
+        ok = bool(reply) and not reply.get("psyche_fallback")
+        if not ok:
+            self.stats["psyche_fallbacks"] += 1
+        return ok
+
     def _repetitions(self, window: int = 8, threshold: int = 3) -> list[str]:
-        """Actions Adam keeps repeating, e.g. "examine radio (5 of the last 8 cycles)"."""
+        """Non-wait actions Adam keeps repeating, e.g. "examine radio (5 of the last 8 cycles)"."""
         actions = list(getattr(self.insight, "actions", []))[-window:]
         counts = Counter(
             " ".join(p for p in (a.get("verb"), a.get("target")) if p not in NULL_TARGETS)
-            for a in actions
+            for a in actions if a.get("verb") != "wait"
         )
         return [f"{act} ({n} of the last {len(actions)} cycles)" for act, n in counts.most_common() if n >= threshold]
+
+    def _waiting(self, window: int = 8, threshold: int = 3) -> Optional[str]:
+        """How much Adam has waited lately, e.g. "4 of the last 8 cycles" (None below threshold).
+
+        Kept apart from _repetitions: waiting can be the right choice (e.g. refusing to do harm),
+        so the prompt nudges instead of demanding change."""
+        actions = list(getattr(self.insight, "actions", []))[-window:]
+        waits = sum(1 for a in actions if a.get("verb") == "wait")
+        return f"{waits} of the last {len(actions)} cycles" if waits >= threshold else None
 
     def _dampen_repeated_impulses(self, impulses: dict) -> dict:
         items = impulses.get('impulses') or []

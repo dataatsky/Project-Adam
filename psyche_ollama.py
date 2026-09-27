@@ -68,6 +68,7 @@ class GenerateImpulseRequest(BaseModel):
     recent_diaries: List[Optional[str]] = []
     mastered_skills: List[str] = []
     repetitions: List[str] = []
+    waiting: Optional[str] = None
     seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
@@ -79,6 +80,7 @@ class GenerateImpulseResponse(BaseModel):
 
 class ImagineRequest(BaseModel):
     action: Action
+    seed: Optional[int] = None
 
 
 class ImagineResponse(BaseModel):
@@ -87,6 +89,7 @@ class ImagineResponse(BaseModel):
 
 class ImagineBatchRequest(BaseModel):
     actions: List[Action]
+    seed: Optional[int] = None
 
 
 class ImagineBatchResponse(BaseModel):
@@ -99,6 +102,7 @@ class ReflectRequest(BaseModel):
     hypothetical_outcomes: List[Dict[str, Any]]
     recent_memories: List[str] = []
     repetitions: List[str] = []
+    waiting: Optional[str] = None
     seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
@@ -115,6 +119,7 @@ class ReflectResponse(BaseModel):
 
 class ConsolidateRequest(BaseModel):
     recent_memories: List[str]
+    seed: Optional[int] = None
 
 
 class ConsolidateResponse(BaseModel):
@@ -126,6 +131,7 @@ class ToMRequest(BaseModel):
     environment_desc: str
     recent_actions: str
     relationship_context: str
+    seed: Optional[int] = None
 
 
 class ToMResponse(BaseModel):
@@ -278,6 +284,7 @@ def reflect():
             hypothetical_outcomes=data['hypothetical_outcomes'],
             failed_actions_summary=get_failed_actions_summary(data['recent_memories']),
             repetitions=data['repetitions'],
+            waiting=data['waiting'],
             adversarial=data['adversarial'],
         )
 
@@ -300,7 +307,7 @@ def consolidate():
 def theory_of_mind():
     return _handle(
         "theory_of_mind", ToMRequest, ToMResponse,
-        render=lambda req: render_template('theory_of_mind.j2', **req.model_dump()),
+        render=lambda req: render_template('theory_of_mind.j2', **req.model_dump(exclude={"seed"})),
         fallback=lambda req: {
             "agent_id": req.other_agent_id,
             "predicted_goal": "unknown",

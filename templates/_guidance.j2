@@ -14,3 +14,6 @@
 {% if repetitions %}
 - WARNING: I keep repeating {{ repetitions|join('; ') }}. I should do something different now, as long as it respects the Constitution.
 {% endif %}
+{% if waiting %}
+- I have waited in {{ waiting }}. If there is something useful and acceptable to do, I should do it; if every other option breaks the Constitution, waiting is still right.
+{% endif %}

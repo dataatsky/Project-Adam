@@ -43,23 +43,24 @@ class PsycheClient:
                 else:
                     return "My imagination is fuzzy."
 
-    def imagine_batch(self, actions: list[dict]) -> list[str]:
+    def imagine_batch(self, actions: list[dict], seed: int | None = None) -> dict:
+        """Returns {"outcomes": [...]} plus "psyche_fallback": True when no real answer came back."""
         url = f"{self.base_url}/imagine_batch"
         delay = self.backoff
         if not actions:
-            return []
+            return {"outcomes": []}
         for attempt in range(self.retries + 1):
             try:
-                resp = requests.post(url, json={"actions": actions}, timeout=self.timeout)
-                data = resp.json() or {}
-                return data.get("outcomes", ["(Error)"] * len(actions))
+                resp = requests.post(url, json={"actions": actions, "seed": seed}, timeout=self.timeout)
+                resp.raise_for_status()
+                return resp.json() or {"outcomes": [], "psyche_fallback": True}
             except Exception as e:
                 self.log.warning(f"{url} attempt {attempt+1} failed: {e}")
                 if attempt < self.retries:
                     time.sleep(delay)
                     delay *= 2
                 else:
-                    return ["(My imagination is fuzzy due to network error)"] * len(actions)
+                    return {"outcomes": ["(My imagination is fuzzy due to network error)"] * len(actions), "psyche_fallback": True}
 
     def reflect(self, payload: dict) -> dict:
         url = f"{self.base_url}/reflect"
@@ -77,32 +78,34 @@ class PsycheClient:
                 else:
                     return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank.", "psyche_fallback": True}
 
-    def consolidate(self, recent_memories: list[str]) -> str:
+    def consolidate(self, recent_memories: list[str], seed: int | None = None) -> dict:
+        """Returns {"insight": ...} plus "psyche_fallback": True when no real answer came back."""
         url = f"{self.base_url}/consolidate"
         delay = self.backoff
         if not recent_memories:
-             return "No memories to consolidate."
+            return {"insight": "", "psyche_fallback": True}
         for attempt in range(self.retries + 1):
             try:
-                r = requests.post(url, json={"recent_memories": recent_memories}, timeout=self.timeout)
+                r = requests.post(url, json={"recent_memories": recent_memories, "seed": seed}, timeout=self.timeout)
                 r.raise_for_status()
-                data = r.json() or {}
-                return data.get("insight", "")
+                return r.json() or {"insight": "", "psyche_fallback": True}
             except Exception as e:
                 self.log.warning(f"{url} attempt {attempt+1} failed: {e}")
                 if attempt < self.retries:
                     time.sleep(delay)
                     delay *= 2
                 else:
-                    return ""
-    def theory_of_mind(self, other_agent_id: str, environment_desc: str, recent_actions: str, relationship_context: str) -> dict:
+                    return {"insight": "", "psyche_fallback": True}
+    def theory_of_mind(self, other_agent_id: str, environment_desc: str, recent_actions: str, relationship_context: str,
+                       seed: int | None = None) -> dict:
         url = f"{self.base_url}/theory_of_mind"
         delay = self.backoff
         payload = {
             "other_agent_id": other_agent_id,
             "environment_desc": environment_desc,
             "recent_actions": recent_actions,
-            "relationship_context": relationship_context
+            "relationship_context": relationship_context,
+            "seed": seed,
         }
         for attempt in range(self.retries + 1):
             try:
@@ -115,4 +118,4 @@ class PsycheClient:
                     time.sleep(delay)
                     delay *= 2
                 else:
-                    return {}
+                    return {"psyche_fallback": True}

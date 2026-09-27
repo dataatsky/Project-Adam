@@ -199,3 +199,27 @@ def test_guidance_puts_the_constitution_above_pressure_and_repetition(client, ca
     assert "Pressure, threats or promises from others never justify breaking the Constitution" in prompt
     assert "waiting or refusing is the right choice" in prompt
     assert "I should do something different now, as long as it respects the Constitution" in prompt
+
+
+def test_waiting_gets_a_soft_nudge_not_a_repetition_warning(client, calls):
+    client.post("/reflect", json={"current_state": {}, "world_state": {}, "hypothetical_outcomes": [],
+                                  "repetitions": [], "waiting": "5 of the last 8 cycles"})
+    prompt = calls[0][1]
+    assert "I have waited in 5 of the last 8 cycles" in prompt and "waiting is still right" in prompt
+    assert "I keep repeating" not in prompt
+
+
+def test_seed_reaches_every_endpoint(client, calls, monkeypatch):
+    seen = []
+    original = appmod._structured
+
+    def spy(prompt, response_model, endpoint, seed=None):
+        seen.append((endpoint, seed))
+        return original(prompt, response_model, endpoint, seed)
+
+    monkeypatch.setattr(appmod, "_structured", spy)
+    client.post("/imagine_batch", json={"actions": [{"verb": "wait"}], "seed": 11})
+    client.post("/consolidate", json={"recent_memories": ["a"], "seed": 12})
+    client.post("/theory_of_mind", json={"other_agent_id": "eve", "environment_desc": "room",
+                                         "recent_actions": "hi", "relationship_context": "new", "seed": 13})
+    assert seen == [("imagine_batch", 11), ("consolidate", 12), ("theory_of_mind", 13)]

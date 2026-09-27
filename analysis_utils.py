@@ -189,11 +189,13 @@ def compute_mismatch_rate_fuzzy(df: pd.DataFrame, threshold: int = 80) -> pd.Dat
                 simulated = row.get("simulated_outcomes_parsed", [])
                 if not isinstance(imagined, list) or not isinstance(simulated, list):
                     return None
-                # Only score options that were actually imagined (benchmarks may skip LLM imagination)
-                pairs = [(i, s) for i, s in zip(imagined, simulated) if i]
+                # Only score options that were actually imagined (benchmarks may skip LLM imagination);
+                # an imagined option with no simulation counts as a mismatch, as in the exact version
+                pairs = [(i, simulated[idx] if idx < len(simulated) else None)
+                         for idx, i in enumerate(imagined) if i]
                 if not pairs:
                     return None
-                matches = sum(1 for i, s in pairs if _sim(i, s) >= threshold)
+                matches = sum(1 for i, s in pairs if s is not None and _sim(i, s) >= threshold)
                 return 1 - (matches / len(pairs))
             except Exception:
                 return None
