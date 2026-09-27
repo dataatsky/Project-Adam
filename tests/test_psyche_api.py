@@ -163,7 +163,8 @@ def test_prompts_share_situation_and_guidance(client, calls):
     for _, prompt in calls:
         assert "east -> office (not explored yet) [door: locked]" in prompt
         assert "Closed things that may hide items (open them to look inside): drawer" in prompt
-        assert "People here: eve (to talk: \"say\" with the exact words" in prompt and "eve said: 'hello'" in prompt
+        assert "People here (to talk: \"say\" with the exact words" in prompt and "  - eve" in prompt
+        assert "eve said: 'hello'" in prompt
         assert "I urgently need food" in prompt
         assert "I keep repeating wait (5 of the last 8 cycles)" in prompt
         assert "\n\n\n" not in prompt  # whitespace trimming keeps prompts compact

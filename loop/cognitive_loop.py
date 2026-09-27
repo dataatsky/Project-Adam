@@ -300,6 +300,11 @@ class CognitiveLoop:
             if self._count_call(tom):
                 insight = f"ToM({other}): Beliefs={tom.get('beliefs')}, Goal={tom.get('predicted_goal')}, Trust={tom.get('trust_level')}, Threat={tom.get('potential_threat')}"
                 self.tom_cache[other] = {"cycle": self.cycle_counter, "insight": insight}
+                if self.world is not None:
+                    # The judgement becomes part of the world's relationships, shown in later prompts
+                    self.world.update_relationship(other, trust=tom.get("trust_level"),
+                                                   threat=tom.get("potential_threat"),
+                                                   predicted_goal=tom.get("predicted_goal"))
         return [self.tom_cache[o]["insight"] for o in present if o in self.tom_cache]
 
     def imagine_and_reflect(self, initial_impulses, world: TextWorld):

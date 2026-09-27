@@ -652,6 +652,21 @@ class TextWorld:
             self.lighting
         )
 
+    def update_relationship(self, other: str, trust: Optional[float] = None, threat: Optional[bool] = None,
+                            predicted_goal: Optional[str] = None):
+        """Record Adam's judgement of another agent. Trust moves halfway toward each new estimate."""
+        rel = self.relationships.setdefault(other, {"trust": 0.5})
+        if trust is not None:
+            try:
+                estimate = max(0.0, min(1.0, float(trust)))
+                rel["trust"] = round(0.5 * rel.get("trust", 0.5) + 0.5 * estimate, 2)
+            except (TypeError, ValueError):
+                pass
+        if threat is not None:
+            rel["threat"] = bool(threat)
+        if predicted_goal:
+            rel["predicted_goal"] = str(predicted_goal)
+
     def _coldness(self, agent: Dict) -> float:
         """0 at 19°C or warmer, 1 at 13°C or colder; a blanket cuts it by 60%."""
         cold = max(0.0, min(1.0, (19.0 - self.temperature) / 6.0))

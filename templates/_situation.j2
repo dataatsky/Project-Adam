@@ -14,7 +14,13 @@
   - none
 {% endfor %}
 {% if world_state.get('people_here') %}
-- People here: {{ world_state.get('people_here')|join(', ') }} (to talk: "say" with the exact words as target, e.g. "Hello {{ world_state.get('people_here')[0] }}, how are you?")
+{% set rel = world_state.get('relationships', {}) %}
+- People here (to talk: "say" with the exact words as target, e.g. "Hello {{ world_state.get('people_here')[0] }}, how are you?"):
+{% for person in world_state.get('people_here') %}
+{% set r = rel.get(person) %}
+  - {{ person }}{% if r %} (trust {{ "%.1f"|format(r.get('trust', 0.5)|float) }}{% if r.get('threat') %}, seems like a threat{% endif %}{% if r.get('predicted_goal') %}, seems to want: {{ r.get('predicted_goal') }}{% endif %}){% endif %}
+
+{% endfor %}
 {% endif %}
 {% if world_state.get('heard') %}
 - I just heard:

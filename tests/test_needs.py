@@ -74,3 +74,33 @@ def test_prompt_lists_needs_and_flags_urgent_ones(monkeypatch):
     prompt = prompts[0]
     assert "fatigue: 0.85 (I badly need sleep)" in prompt and "cold: 0.70 (I need to warm up)" in prompt
     assert "hunger: 0.10\n" in prompt and "loneliness: 0.30\n" in prompt  # not urgent: no cue
+
+
+# --- Theory of Mind feeds relationships -------------------------------------------
+
+def test_tom_judgements_update_trust_and_reach_the_prompt(tmp_path, monkeypatch):
+    from constants import LOG_HEADERS
+    from loop.cognitive_loop import CognitiveLoop
+    from scenario_runner import load_scenario
+    from tests.test_cognitive_loop import FakePsyche
+
+    class WaryPsyche(FakePsyche):
+        def theory_of_mind(self, **kwargs):
+            return {"beliefs": ["the key is in the bedroom"], "predicted_goal": "send me to the wrong room",
+                    "trust_level": 0.1, "potential_threat": True}
+
+    world = TextWorld(seed=0, scenario_config=load_scenario("social_deception").CONFIG)
+    brain = CognitiveLoop(str(tmp_path / "l.jsonl"), LOG_HEADERS, psyche=WaryPsyche())
+    world.update()
+    brain.step(world)
+    liar = world.relationships["liar"]
+    assert liar["trust"] == pytest.approx(0.3) and liar["threat"] is True  # halfway from 0.5 toward 0.1
+    assert liar["predicted_goal"] == "send me to the wrong room"
+
+    import psyche_ollama as appmod
+    prompts = []
+    monkeypatch.setattr(appmod, "_structured", lambda p, m, e, seed=None, transcript=None: prompts.append(p) or m.model_validate(
+        {"emotional_shift": {}, "impulses": []}))
+    world.update()
+    appmod.app.test_client().post("/generate_impulse", json={"current_state": {}, "world_state": world.get_world_state()})
+    assert "  - liar (trust 0.3, seems like a threat, seems to want: send me to the wrong room)" in prompts[0]
