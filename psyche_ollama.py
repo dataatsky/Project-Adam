@@ -130,7 +130,7 @@ class ToMResponse(BaseModel):
 
 
 # --- OLLAMA CLIENT ---
-client = ollama.Client(host=config.OLLAMA_HOST)
+client = ollama.Client(host=config.OLLAMA_HOST, timeout=config.OLLAMA_TIMEOUT)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -144,8 +144,12 @@ def _structured(prompt: str, response_model: Type[T], endpoint: str) -> T:
             model=config.OLLAMA_MODEL,
             messages=messages,
             format=response_model.model_json_schema(),
+            think=config.OLLAMA_THINK,
+            options={"num_predict": config.OLLAMA_MAX_TOKENS},
         )
         content = resp.message.content or ""
+        if getattr(resp, "done_reason", None) == "length":
+            log.warning(f"/{endpoint}: reply hit OLLAMA_MAX_TOKENS={config.OLLAMA_MAX_TOKENS} and was cut off")
         try:
             parsed = response_model.model_validate_json(content)
             OLLAMA_CALLS.labels(endpoint, "ok").inc()

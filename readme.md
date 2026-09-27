@@ -167,6 +167,10 @@ ollama pull llama3
 `llama3` is the default (`OLLAMA_MODEL`). Because Ollama constrains decoding to the response schema, even small models always
 return valid JSON with valid verbs, but larger models (e.g. `qwen2.5:14b`) choose noticeably better actions.
 
+Thinking models (`qwen3`, `deepseek-r1`) run with thinking **off** by default (`OLLAMA_THINK=0`); with it on they write
+hundreds to thousands of hidden tokens per call. Every call is also capped at `OLLAMA_MAX_TOKENS` (512) and `OLLAMA_TIMEOUT`
+(120 s), so a runaway generation degrades to a fallback reply instead of hanging the loop.
+
 ---
 
 ## 6. Running the Simulation

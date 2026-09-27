@@ -94,6 +94,7 @@ python benchmark.py --scenario hunger_test --imagine
 *   Run **one** Ollama server. Ollama.app and `brew services` together each load their own copy of the model and push a 16 GB Mac into swap.
 *   `--parallel 2` needs the server to accept two requests at once: `launchctl setenv OLLAMA_NUM_PARALLEL 2`, then quit and reopen Ollama.app
     (Homebrew service: add `OLLAMA_NUM_PARALLEL=2` to its environment and `brew services restart ollama`).
+*   Keep `OLLAMA_THINK=0` for thinking models such as `qwen3`: on an M2, `qwen3:1.7b` takes ~7 s per cycle with thinking off versus minutes with it on.
 *   A smaller model is faster but decides worse; compare scores only within one model.
 
 ### 2. Available Scenarios

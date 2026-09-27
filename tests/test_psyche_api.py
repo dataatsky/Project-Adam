@@ -130,13 +130,15 @@ def test_structured_reasks_after_invalid_json(monkeypatch):
         def __init__(self, content):
             self.message = type("M", (), {"content": content})()
 
-    def fake_chat(model, messages, format):
+    def fake_chat(model, messages, format, think, options):
+        assert think is False and options["num_predict"] > 0
         seen.append(list(messages))
         assert format["properties"]["outcome"]["type"] == "string"
         return FakeMsg(next(replies))
 
     monkeypatch.setattr(appmod.client, "chat", fake_chat)
     monkeypatch.setattr(appmod.config, "OLLAMA_RETRIES", 2)
+    monkeypatch.setattr(appmod.config, "OLLAMA_THINK", False)
     out = appmod._structured("predict", appmod.ImagineResponse, "imagine")
     assert out.outcome == "fine"
     assert len(seen) == 3 and "did not match the schema" in seen[-1][-1]["content"]

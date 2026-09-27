@@ -12,6 +12,12 @@ PSYCHE_PORT = int(os.getenv("PSYCHE_PORT", "5001"))
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3").strip().strip('"')
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_RETRIES = int(os.getenv("OLLAMA_RETRIES", "2"))
+# Thinking models (qwen3, deepseek-r1) can write thousands of hidden tokens per call; off by default
+OLLAMA_THINK = os.getenv("OLLAMA_THINK", "0") not in {"0", "false", "False", ""}
+# Hard cap on generated tokens per call, so a runaway generation can't hang the loop
+OLLAMA_MAX_TOKENS = int(os.getenv("OLLAMA_MAX_TOKENS", "512"))
+# Seconds the psyche service waits for Ollama before giving up on a call
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "120"))
 
 # Pinecone / embeddings
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE")
