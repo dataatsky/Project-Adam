@@ -22,6 +22,11 @@
   - {{ line }}
 {% endfor %}
 {% endif %}
-- Hunger: {{ "%.2f"|format(current_state.get('needs', {}).get('hunger', 0)|float) }} (0=satiated, 1=starving{% if current_state.get('needs', {}).get('hunger', 0)|float >= 0.6 %}; I urgently need food{% endif %})
+{% set urgent = {"hunger": "I urgently need food", "fatigue": "I badly need sleep", "cold": "I need to warm up", "loneliness": "I long for company"} %}
+- Needs (0 = fine, 1 = desperate):
+{% for need, value in current_state.get('needs', {}).items() %}
+  - {{ need }}: {{ "%.2f"|format(value|float) }}{% if value|float >= 0.6 %} ({{ urgent.get(need, "urgent") }}){% endif %}
+
+{% endfor %}
 - Goal: {{ current_state.get('goal') or 'none' }}{% if world_state.get('goal_step') %} (next step: {{ world_state.get('goal_step', {}).get('desc') }}){% endif %}
 

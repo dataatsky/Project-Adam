@@ -115,6 +115,8 @@ if not AGENT_STATUS:
         },
         "needs": {
             "hunger": _get_float("AGENT_HUNGER", 0.1),
+            "fatigue": _get_float("AGENT_FATIGUE", 0.2),
+            "loneliness": _get_float("AGENT_LONELINESS", 0.2),
         },
         # Empty = Adam proposes his own goal from his needs
         "goal": os.getenv("AGENT_GOAL", ""),

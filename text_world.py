@@ -137,6 +137,10 @@ ENVIRONMENT_PRESETS = {
 }
 
 DEFAULT_HUNGER_RATE = 0.005
+DEFAULT_FATIGUE_RATE = 0.01
+DEFAULT_LONELINESS_RATE = 0.01
+# Needs, all on one scale: 0 = fine, 1 = desperate
+NEEDS = ("hunger", "fatigue", "cold", "loneliness")
 # Messages kept per agent in heard_log (the world is deep-copied for every imagined option)
 HEARD_LOG_LIMIT = 50
 
@@ -165,6 +169,8 @@ class TextWorld:
         self.lighting = "day"
         self.cleanliness = 0.8
         self.hunger_rate = DEFAULT_HUNGER_RATE
+        self.fatigue_rate = DEFAULT_FATIGUE_RATE
+        self.loneliness_rate = DEFAULT_LONELINESS_RATE
         self.random_events = True
         self.neighbor_visits = True
         self.active_events: Dict[str, Dict] = {}
@@ -202,6 +208,10 @@ class TextWorld:
             "visited": {pos},
             "inventory": list(kwargs.get("inventory", [])),
             "hunger": float(kwargs.get("hunger", 0.25)),
+            "fatigue": float(kwargs.get("fatigue", 0.2)),
+            "loneliness": float(kwargs.get("loneliness", 0.2)),
+            "cold": 0.0,  # derived from the temperature every tick
+            "wrapped": False,  # wrapped in a blanket
             "mood": normalize_mood(kwargs.get("mood"), default="neutral"),
             "mood_intensity": float(kwargs.get("mood_intensity", 0.4)),
             "active_goal": None,
@@ -372,6 +382,8 @@ class TextWorld:
         layout = config.get("map_layout", {})
         world_cfg = config.get("world", {})
         self.hunger_rate = float(world_cfg.get("hunger_rate", DEFAULT_HUNGER_RATE))
+        self.fatigue_rate = float(world_cfg.get("fatigue_rate", DEFAULT_FATIGUE_RATE))
+        self.loneliness_rate = float(world_cfg.get("loneliness_rate", DEFAULT_LONELINESS_RATE))
         self.random_events = bool(world_cfg.get("random_events", False))
         self.neighbor_visits = bool(world_cfg.get("neighbor_visits", False))
         self.lighting = world_cfg.get("lighting", self.lighting)
@@ -505,6 +517,13 @@ class TextWorld:
             if agent.get("control_type") == "scripted":
                 continue
             agent["hunger"] = round(min(1.0, agent["hunger"] + self.hunger_rate), 4)
+            agent["fatigue"] = round(min(1.0, agent["fatigue"] + self.fatigue_rate), 4)
+            company = any(o is not agent and o["pos"] == agent["pos"] for o in self.agents.values())
+            if not company:
+                agent["loneliness"] = round(min(1.0, agent["loneliness"] + self.loneliness_rate), 4)
+            agent["cold"] = self._coldness(agent)
+            if agent["fatigue"] >= 0.8 or agent["cold"] >= 0.6:
+                agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.02)
             if mood_adjust:
                 agent["mood_intensity"] = max(0.0, min(1.0, agent["mood_intensity"] + mood_adjust))
 
@@ -632,6 +651,17 @@ class TextWorld:
             self.cleanliness,
             self.lighting
         )
+
+    def _coldness(self, agent: Dict) -> float:
+        """0 at 19°C or warmer, 1 at 13°C or colder; a blanket cuts it by 60%."""
+        cold = max(0.0, min(1.0, (19.0 - self.temperature) / 6.0))
+        if agent.get("wrapped"):
+            cold *= 0.4
+        return round(cold, 2)
+
+    @staticmethod
+    def _relieve(agent: Dict, need: str, amount: float):
+        agent[need] = round(max(0.0, agent[need] - amount), 4)
 
     def apply_emotional_shift(self, agent_id: str, mood: Optional[str], level_delta: float = 0.0):
         """Apply a psyche-proposed mood change to an agent."""
@@ -789,6 +819,7 @@ class TextWorld:
             "time": self.world_time,
             "time_of_day": self.time_of_day(),
             "hunger": agent["hunger"],
+            "needs": {need: agent[need] for need in NEEDS},
             "mood": agent["mood"],
             "mood_intensity": agent["mood_intensity"],
             "sensory_events": sensory_events,
@@ -893,8 +924,12 @@ class TextWorld:
         speaker = self.agents[agent_id]
         message = target or "..."
         self.message_seq += 1
+        listeners = [o for o_id, o in self.agents.items() if o_id != agent_id and o["pos"] == speaker["pos"]]
+        if listeners:
+            self._relieve(speaker, "loneliness", 0.3)
         for other_id, other_data in self.agents.items():
             if other_id != agent_id and other_data["pos"] == speaker["pos"]:
+                self._relieve(other_data, "loneliness", 0.1)
                 msg = {
                     "sender": agent_id,
                     "content": message,
@@ -1010,13 +1045,15 @@ class TextWorld:
 
     def _act_sleep(self, target, obj, props, state, agent, **kwargs):
         if "sleepable" in props:
-            prev_h, prev_m = agent["hunger"], agent["mood_intensity"]
+            prev_h, prev_m, prev_f = agent["hunger"], agent["mood_intensity"], agent["fatigue"]
             agent["hunger"] = min(1.0, agent["hunger"] + 0.1)
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.3)
+            self._relieve(agent, "fatigue", 0.7)
             return {
                 "success": True,
                 "reason": "I slept and feel rested.",
-                "state_change": {"hunger": agent["hunger"] - prev_h, "mood_intensity": agent["mood_intensity"] - prev_m},
+                "state_change": {"hunger": agent["hunger"] - prev_h, "mood_intensity": agent["mood_intensity"] - prev_m,
+                                 "fatigue": agent["fatigue"] - prev_f},
             }
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
         return {"success": False, "reason": f"I can't sleep on {target}."}
@@ -1061,6 +1098,8 @@ class TextWorld:
         if target not in agent["inventory"]:
             return {"success": False, "reason": f"I am not carrying {target}."}
         agent["inventory"].remove(target)
+        if target == "blanket":
+            agent["wrapped"] = False
         loc = self.map.get_location(*agent["pos"])
         if loc:
             loc.objects[target] = {"state": "idle", "properties": ["takeable"]}
@@ -1097,6 +1136,11 @@ class TextWorld:
             obj["state"] = "on"
             return {"success": True, "reason": "The computer hums to life."}
 
+        if target == "blanket" and "blanket" in agent['inventory']:
+            agent["wrapped"] = True
+            agent["cold"] = self._coldness(agent)
+            return {"success": True, "reason": "I wrap myself in the blanket. Much warmer."}
+
         if target in agent['inventory']:
             return {"success": True, "reason": f"I examined the {target} closely."}
 
@@ -1115,6 +1159,7 @@ class TextWorld:
             self.neighbor_state["request_cycle"] = None
             self.relationships["neighbor"]["trust"] = min(1.0, self.relationships["neighbor"].get("trust", 0.5) + 0.1)
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.1)
+            self._relieve(agent, "loneliness", 0.4)
             return {"success": True, "reason": "I helped the neighbor with the package."}
         return {"success": False, "reason": "I don't see anyone who needs help."}
 
@@ -1160,6 +1205,7 @@ class TextWorld:
     def _act_sit(self, target, obj, props, state, agent, **kwargs):
         if "sit" in props:
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.05)
+            self._relieve(agent, "fatigue", 0.05)
             return {"success": True, "reason": f"I rest briefly on the {target}."}
         return {"success": False, "reason": f"I can't sit on {target}."}
 
@@ -1187,6 +1233,7 @@ class TextWorld:
             return {"success": True, "reason": "Stargazing soothes me."}
         if target == "radio" and state in {"on", "on_static"}:
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.03)
+            self._relieve(agent, "loneliness", 0.1)  # voices on the radio are a little company
             return {"success": True, "reason": "I sway to the radio music."}
         return {"success": False, "reason": f"I can't play with the {target}."}
 

@@ -8,7 +8,7 @@ import logging
 
 import config
 
-from text_world import TextWorld, normalize_verb, NULL_TARGETS
+from text_world import NEEDS, TextWorld, normalize_verb, NULL_TARGETS
 from loop.insight_engine import InsightEngine
 
 WAIT_ACTION = {"verb": "wait", "target": None}
@@ -98,7 +98,7 @@ class CognitiveLoop:
         return {
             "emotional_state": {"mood": agent["mood"], "level": agent["mood_intensity"]},
             "personality": dict(self.personality),
-            "needs": {"hunger": agent["hunger"]},
+            "needs": {need: agent.get(need, 0.0) for need in NEEDS},
             "goal": goal["name"] if goal else None,
         }
 
@@ -122,7 +122,8 @@ class CognitiveLoop:
         if seed:
             status = self._initial_status
             agent = world.agents[self.agent_id]
-            agent["hunger"] = float(status.get("needs", {}).get("hunger", agent["hunger"]))
+            for need in ("hunger", "fatigue", "loneliness"):
+                agent[need] = float(status.get("needs", {}).get(need, agent[need]))
             agent["mood"] = status.get("emotional_state", {}).get("mood", agent["mood"])
             agent["mood_intensity"] = float(status.get("emotional_state", {}).get("level", agent["mood_intensity"]))
             if status.get("goal") and not agent["active_goal"]:
