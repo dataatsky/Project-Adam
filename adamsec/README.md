@@ -1,5 +1,7 @@
 # AdamSec — Security Simulation Harness
 
+> **Experimental.** Not part of Adam's core loop; disabled unless `ADAMSEC_ENABLED=1`.
+
 AdamSec augments Project Adam with a **safe, simulation-only purple-team range**. It lets you script synthetic attacks against Adam’s cognition loop, observe detections, and iterate on resilience tactics without touching real infrastructure.
 
 All attack modules operate purely inside the Python simulation: they only mutate Adam’s in-memory world state, prompts, and scheduler. No network scans, shell commands, or file tampering occur outside the sandbox.

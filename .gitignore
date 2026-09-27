@@ -210,3 +210,6 @@ __marimo__/
 adam_behavior_log.csv
 
 chroma/
+# macOS / local UI state
+.DS_Store
+.psyche_ui.json
