@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adam's World</title>
+<style>
+  :root {
+    --panel-bg: rgba(250, 250, 247, 0.94);
+    --panel-fg: #1d232b;
+    --muted: #5f6b78;
+    --line: #d9dde2;
+    --ok: #2f8f4e;
+    --bad: #c0392b;
+    --accent: #3b6fd8;
+    --bubble-bg: #ffffff;
+    --bubble-fg: #1d232b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --panel-bg: rgba(22, 26, 32, 0.94);
+      --panel-fg: #e6e9ee;
+      --muted: #97a3b1;
+      --line: #313844;
+      --bubble-bg: #232a34;
+      --bubble-fg: #eef1f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #cfe3f2;
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--panel-fg); }
+  #scene { position: fixed; inset: 0; }
+  #panel { position: fixed; top: 12px; left: 12px; bottom: 12px; width: 330px; overflow-y: auto;
+    background: var(--panel-bg); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.12); backdrop-filter: blur(6px); }
+  #panel h1 { font-size: 17px; margin: 0 0 2px; }
+  #panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 16px 0 6px; }
+  .sub { color: var(--muted); font-size: 12.5px; }
+  .phase { margin-top: 6px; font-size: 13px; }
+  .phase b { color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+  .row .label { width: 78px; color: var(--muted); font-size: 12.5px; }
+  .bar { flex: 1; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: 4px; }
+  .val { width: 34px; text-align: right; font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin: 2px 4px 2px 0;
+    background: var(--line); }
+  .mood-dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .action { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); }
+  .action .verb { font-weight: 600; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .reason { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  ul.log { list-style: none; padding: 0; margin: 0; font-size: 12.5px; }
+  ul.log li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+  ul.log li .c { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 6px; }
+  #controls { position: fixed; top: 12px; right: 12px; display: flex; gap: 6px; }
+  #controls button { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel-bg); color: var(--panel-fg); }
+  #controls button.on { border-color: var(--accent); color: var(--accent); }
+  #banner { position: fixed; left: 50%; top: 14px; transform: translateX(-50%); padding: 8px 14px; border-radius: 8px;
+    background: #fff4d6; color: #5a4200; border: 1px solid #e8cf85; font-size: 13px; display: none; max-width: 90vw; }
+  #outcome { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); padding: 8px 18px;
+    border-radius: 999px; font-weight: 700; display: none; color: #fff; }
+  /* labels in the 3D scene */
+  .lbl-room { font-size: 13px; font-weight: 700; color: #26303b; opacity: .75; pointer-events: none;
+    text-shadow: 0 1px 0 rgba(255,255,255,.7); }
+  .lbl-room.unvisited { opacity: .35; }
+  .lbl-obj { font-size: 10.5px; color: #26303b; background: rgba(255,255,255,.72); padding: 1px 5px; border-radius: 4px;
+    pointer-events: none; white-space: nowrap; }
+  .lbl-agent { font-size: 12px; font-weight: 700; color: #fff; background: rgba(20,24,30,.7); padding: 1px 6px;
+    border-radius: 6px; pointer-events: none; }
+  .bubble { max-width: 240px; font-size: 12.5px; background: var(--bubble-bg); color: var(--bubble-fg);
+    padding: 6px 9px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.2); pointer-events: none;
+    transition: opacity .6s; }
+  .bubble.thought { font-style: italic; border: 1px dashed #9aa6b4; }
+  body.night .lbl-room { color: #e8edf5; text-shadow: none; }
+  body.night .lbl-obj { background: rgba(20,24,30,.7); color: #e8edf5; }
+  @media (max-width: 720px) {
+    #panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; height: 42vh; }
+    #controls { top: 8px; right: 8px; }
+  }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div id="banner"></div>
+<div id="outcome"></div>
+<div id="controls">
+  <button id="follow" class="on" title="Keep the camera on Adam">Follow Adam</button>
+  <button id="reset" title="Reset the camera">Reset view</button>
+  <button id="pause" title="Stop polling for updates">Pause</button>
+</div>
+<aside id="panel">
+  <h1>Adam's World</h1>
+  <div class="sub" id="clock">Connecting…</div>
+  <div class="phase" id="phase"></div>
+
+  <h2>Mood</h2>
+  <div class="row"><span class="mood-dot" id="moodDot"></span><span id="moodName">—</span>
+    <div class="bar"><span id="moodBar"></span></div><span class="val" id="moodVal"></span></div>
+
+  <h2>Needs</h2>
+  <div id="needs"></div>
+
+  <h2>Goal</h2>
+  <div id="goal" class="sub">—</div>
+
+  <h2>Carrying</h2>
+  <div id="inventory" class="sub">nothing</div>
+
+  <h2>Last action</h2>
+  <div class="action" id="action"><span class="sub">—</span></div>
+
+  <h2>Impulses</h2>
+  <div id="impulses" class="sub">—</div>
+
+  <h2>Remembers</h2>
+  <ul class="log" id="memories"><li class="sub">nothing yet</li></ul>
+
+  <h2>Timeline</h2>
+  <ul class="log" id="timeline"></ul>
+</aside>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+
+// ---------------------------------------------------------------- config
+const params = new URLSearchParams(location.search);
+const API = params.get("api") || "";            // same origin by default (served by main.py)
+const POLL_MS = Number(params.get("poll") || 1000);
+const ROOM = 10;                                 // world units per grid cell
+const WALL_H = 1.6, WALL_T = 0.18, GAP = 2.8;
+const SLOTS = [[-3, -3], [0, -3.4], [3, -3], [-3.4, 0], [3.4, 0], [-3, 3], [0, 3.4], [3, 3]];
+const MOOD_COLORS = {
+  neutral: 0x9aa5b1, calm: 0x62b6cb, content: 0x7bc47f, happy: 0xf2c14e, curious: 0x3b82f6, focused: 0x5b6ee1,
+  determined: 0x8e5bd9, hungry: 0xe8833a, tired: 0x7a869a, anxious: 0xd9a441, afraid: 0x9b59b6,
+  frustrated: 0xd9534f, sad: 0x4a6fa5, suspicious: 0x8d6e63,
+};
+const NEED_COLORS = { hunger: "#e8833a", fatigue: "#7a869a", cold: "#4aa3df", loneliness: "#9b6bd9" };
+const OTHER_COLORS = [0xe86fa0, 0x9c3b3b, 0x4e9a6f, 0xc58b2c];
+
+// grid (x, y) with y = north  ->  scene (X, Z) with north = -Z
+const toScene = (x, y) => new THREE.Vector3(x * ROOM, 0, -y * ROOM);
+const key = (x, y) => `${x},${y}`;
+
+// ---------------------------------------------------------------- scene
+const host = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+host.appendChild(renderer.domElement);
+const labels = new CSS2DRenderer();
+labels.setSize(innerWidth, innerHeight);
+Object.assign(labels.domElement.style, { position: "absolute", top: 0, left: 0, pointerEvents: "none" });
+host.appendChild(labels.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 500);
+camera.position.set(14, 24, 22);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.47;
+controls.target.set(0, 0, 0);
+
+const hemi = new THREE.HemisphereLight(0xffffff, 0x8a8f99, 1.0);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+sun.position.set(20, 40, 15);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60 });
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), new THREE.MeshStandardMaterial({ color: 0xbfd3bf }));
+ground.rotation.x = -Math.PI / 2; ground.position.y = -0.21; ground.receiveShadow = true;
+scene.add(ground);
+
+const layoutGroup = new THREE.Group(); scene.add(layoutGroup);
+const objectsGroup = new THREE.Group(); scene.add(objectsGroup);
+const agentsGroup = new THREE.Group(); scene.add(agentsGroup);
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight); labels.setSize(innerWidth, innerHeight);
+});
+
+// ---------------------------------------------------------------- helpers
+const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.8, ...extra });
+function box(w, h, d, color, extra) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat(color, extra));
+  m.castShadow = true; m.receiveShadow = true; m.position.y = h / 2; return m;
+}
+function label(text, cls) {
+  const el = document.createElement("div"); el.className = cls; el.textContent = text;
+  return new CSS2DObject(el);
+}
+function hashHue(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function roomColor(name) { return new THREE.Color().setHSL(hashHue(name) / 360, 0.28, 0.82); }
+function has(o, ...words) { return words.some(w => o.name.toLowerCase().includes(w)); }
+function stateIs(o, ...states) { return states.includes((o.state || "").toLowerCase()); }
+
+// ---------------------------------------------------------------- object models
+function makeObject(o) {
+  const g = new THREE.Group();
+  const open = stateIs(o, "open"), on = stateIs(o, "on", "on_static", "boiling"), err = stateIs(o, "error");
+  const broken = stateIs(o, "broken");
+  const glow = color => ({ emissive: new THREE.Color(color), emissiveIntensity: 0.9 });
+  if (has(o, "fridge")) {
+    g.add(box(1.1, 2.0, 0.9, 0xf2f4f5));
+    const door = box(1.1, 2.0, 0.08, 0xdfe3e6); door.position.z = 0.49;
+    if (open) { door.rotation.y = -1.2; door.position.x = 0.45; door.position.z = 0.8; }
+    g.add(door);
+  } else if (has(o, "stove")) {
+    g.add(box(1.1, 0.9, 0.9, 0x3a3f45));
+    const top = box(0.9, 0.04, 0.7, on ? 0xff4d2e : 0x222222, on ? glow(0xff3300) : {}); top.position.y = 0.92; g.add(top);
+  } else if (has(o, "bed")) {
+    g.add(box(1.4, 0.45, 2.2, 0x6b8cc7));
+    const pillow = box(1.0, 0.18, 0.4, 0xf3f3f3); pillow.position.set(0, 0.54, -0.8); g.add(pillow);
+  } else if (has(o, "sofa", "bench", "chair")) {
+    g.add(box(has(o, "chair") ? 0.8 : 2.0, 0.45, 0.8, 0x8c6d5a));
+    const back = box(has(o, "chair") ? 0.8 : 2.0, 0.7, 0.18, 0x7a5c4b); back.position.set(0, 0.7, -0.32); g.add(back);
+  } else if (has(o, "tv", "computer")) {
+    g.add(box(0.5, 0.5, 0.4, 0x444a52));
+    const color = err ? 0xff3030 : on ? 0x7fd3ff : 0x111418;
+    const screen = box(1.3, 0.8, 0.08, color, (on || err) ? glow(color) : {}); screen.position.y = 0.9; g.add(screen);
+  } else if (has(o, "radio", "generator")) {
+    g.add(box(has(o, "generator") ? 1.2 : 0.6, 0.5, 0.4, has(o, "generator") ? 0x55606b : 0xa0522d,
+      on ? glow(0xffaa33) : {}));
+  } else if (has(o, "window")) {
+    const color = broken ? 0xc0392b : 0x9fd3f5;
+    const pane = box(1.6, 1.4, 0.08, color, { transparent: true, opacity: broken ? 0.9 : 0.55 });
+    pane.position.y = 1.0;
+    if (broken) { pane.rotation.z = 0.5; pane.position.y = 0.4; }
+    if (open) pane.rotation.y = 0.9;
+    g.add(pane);
+  } else if (has(o, "plant")) {
+    const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.22, 0.45, 16), mat(0xa0522d));
+    pot.position.y = 0.22; g.add(pot);
+    const wilted = stateIs(o, "wilted");
+    const leaves = new THREE.Mesh(new THREE.SphereGeometry(wilted ? 0.3 : 0.5, 16, 12), mat(wilted ? 0x8a6d3b : 0x3c9d4f));
+    leaves.position.y = wilted ? 0.6 : 0.85; g.add(leaves);
+  } else if (has(o, "vase")) {
+    const vase = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 0.9, 16), mat(broken ? 0xc0392b : 0x5c7cfa));
+    vase.position.y = 0.45; if (broken) { vase.rotation.z = 1.4; vase.position.y = 0.2; } g.add(vase);
+  } else if (has(o, "key")) {
+    const k = new THREE.Mesh(new THREE.TorusGeometry(0.18, 0.06, 8, 16), mat(0xe0b53c, glow(0x9a7a10)));
+    k.position.y = 0.5; g.add(k);
+  } else if (has(o, "kettle", "sink", "mirror", "whiteboard", "telescope", "shower")) {
+    const tall = has(o, "whiteboard", "mirror", "shower");
+    g.add(box(tall ? 1.2 : 0.6, tall ? 1.5 : 0.6, tall ? 0.1 : 0.5, has(o, "whiteboard", "mirror") ? 0xf5f7fa : 0x9aa5b1));
+  } else if (o.properties.includes("openable") || o.items.length || has(o, "shelf", "desk", "drawer", "cabinet",
+             "wardrobe", "chest", "crate", "box", "nightstand")) {
+    const tall = has(o, "wardrobe", "shelf", "cabinet");
+    const h = tall ? 1.9 : 0.8;
+    g.add(box(1.1, h, 0.8, 0xa9794f));
+    const lid = box(1.1, tall ? h : 0.08, tall ? 0.06 : 0.8, 0x8b5e3c);
+    if (tall) { lid.position.z = 0.43; if (open) { lid.rotation.y = -1.3; lid.position.x = 0.5; lid.position.z = 0.8; } }
+    else { lid.position.y = h + 0.04; if (open) { lid.rotation.x = -1.1; lid.position.z = -0.45; lid.position.y = h + 0.35; } }
+    g.add(lid);
+    const visible = open || !o.properties.includes("openable");
+    if (visible) o.items.forEach((item, i) => {
+      const c = box(0.22, 0.22, 0.22, has({ name: item }, "key") ? 0xe0b53c : 0xf0e6d2);
+      c.position.set(-0.35 + i * 0.3, h + (tall ? 0.15 : 0.2), 0); g.add(c);
+    });
+  } else {
+    g.add(box(0.7, 0.7, 0.7, 0xb8b0a2));
+  }
+  const text = o.state && !["idle", "exist", "tidy", "made", "arranged", "clean", "healthy", "blank", "clear"].includes(o.state)
+    ? `${o.name} (${o.state})` : o.name;
+  const l = label(text.replaceAll("_", " "), "lbl-obj"); l.position.y = 2.3; g.add(l);
+  return g;
+}
+
+// ---------------------------------------------------------------- world building
+let layoutSig = "", objectSig = {}, roomsByKey = {}, objectPos = {};
+const agents = {};   // id -> {group, body, bubble, thought, target: Vector3}
+
+function buildLayout(world, adam) {
+  const sig = JSON.stringify([world.rooms.map(r => [r.x, r.y, r.name]), world.doors]);
+  const visited = new Set((adam?.visited || []).map(p => key(...p)));
+  if (sig !== layoutSig) {
+    layoutSig = sig;
+    layoutGroup.clear(); objectsGroup.clear(); objectSig = {};
+    roomsByKey = Object.fromEntries(world.rooms.map(r => [key(r.x, r.y), r]));
+    const doorAt = {};
+    for (const d of world.doors) { doorAt[key(...d.a) + "|" + key(...d.b)] = d; doorAt[key(...d.b) + "|" + key(...d.a)] = d; }
+    for (const r of world.rooms) {
+      const c = toScene(r.x, r.y);
+      const floor = box(ROOM - 0.3, 0.2, ROOM - 0.3, roomColor(r.name));
+      floor.position.set(c.x, -0.1, c.z); floor.receiveShadow = true; floor.castShadow = false;
+      floor.userData.roomKey = key(r.x, r.y);
+      layoutGroup.add(floor);
+      const name = label(r.name.replaceAll("_", " "), "lbl-room");
+      name.position.set(c.x, 0.05, c.z + ROOM / 2 - 1); name.userData.roomKey = key(r.x, r.y);
+      layoutGroup.add(name);
+      // walls: north (+y) / south (-y) / east (+x) / west (-x), with a doorway where a room is adjacent
+      for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+        const neighbor = roomsByKey[key(r.x + dx, r.y + dy)];
+        const along = dy !== 0;                                // wall runs along X for north/south
+        const offset = new THREE.Vector3(dx * (ROOM / 2 - WALL_T / 2), 0, -dy * (ROOM / 2 - WALL_T / 2));
+        const pieces = neighbor ? [[-(ROOM + GAP) / 4, (ROOM - GAP) / 2], [(ROOM + GAP) / 4, (ROOM - GAP) / 2]] : [[0, ROOM]];
+        for (const [shift, len] of pieces) {
+          const w = box(along ? len : WALL_T, WALL_H, along ? WALL_T : len, 0xeeeae3);
+          w.position.set(c.x + offset.x + (along ? shift : 0), WALL_H / 2, c.z + offset.z + (along ? 0 : shift));
+          layoutGroup.add(w);
+        }
+        const door = neighbor && doorAt[key(r.x, r.y) + "|" + key(r.x + dx, r.y + dy)];
+        if (door && (dx > 0 || dy > 0)) {                       // draw each shared door once
+          const color = door.state === "locked" ? 0xc0392b : door.state === "open" ? 0x7bc47f : 0x8b5e3c;
+          const d = box(along ? GAP : WALL_T * 1.6, WALL_H + 0.5, along ? WALL_T * 1.6 : GAP, color);
+          d.position.set(c.x + offset.x + dx * WALL_T, (WALL_H + 0.5) / 2, c.z + offset.z - dy * WALL_T);
+          if (door.state === "open") d.rotation.y = 1.2;
+          const l = label(door.state === "locked" ? "🔒 locked door" : `door (${door.state})`, "lbl-obj");
+          l.position.y = WALL_H + 0.9; d.add(l);
+          layoutGroup.add(d);
+        }
+      }
+    }
+  }
+  // dim rooms Adam hasn't been to yet
+  for (const child of layoutGroup.children) {
+    const k = child.userData.roomKey;
+    if (!k) continue;
+    const seen = visited.size === 0 || visited.has(k);
+    if (child.isMesh) child.material.color = roomColor(roomsByKey[k].name).multiplyScalar(seen ? 1 : 0.62);
+    else if (child.element) child.element.classList.toggle("unvisited", !seen);
+  }
+  // objects (rebuilt one by one when their state changes)
+  const present = new Set();
+  for (const r of world.rooms) {
+    const c = toScene(r.x, r.y);
+    r.objects.forEach((o, i) => {
+      const id = `${key(r.x, r.y)}:${o.name}`;
+      present.add(id);
+      const sig = JSON.stringify([o.state, o.items]);
+      const [sx, sz] = SLOTS[i % SLOTS.length];
+      const pos = new THREE.Vector3(c.x + sx * (1 + Math.floor(i / SLOTS.length) * 0.12), 0, c.z + sz);
+      objectPos[id] = pos;
+      if (objectSig[id] === sig) return;
+      const old = objectsGroup.getObjectByName(id); if (old) objectsGroup.remove(old);
+      const g = makeObject(o); g.name = id; g.position.copy(pos);
+      g.lookAt(c.x, 0, c.z);                                  // face the middle of the room
+      objectsGroup.add(g); objectSig[id] = sig;
+    });
+  }
+  for (const id of Object.keys(objectSig)) if (!present.has(id)) {
+    const old = objectsGroup.getObjectByName(id); if (old) objectsGroup.remove(old); delete objectSig[id];
+  }
+}
+
+function makeAgent(a, index, isAdam) {
+  const color = isAdam ? MOOD_COLORS[a.mood] ?? 0x9aa5b1 : OTHER_COLORS[index % OTHER_COLORS.length];
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.38, 0.9, 6, 16), mat(color));
+  body.position.y = 0.85; body.castShadow = true; group.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 20, 16), mat(0xf1d3b3));
+  head.position.y = 1.75; head.castShadow = true; group.add(head);
+  const name = label(isAdam ? "Adam" : a.id.replaceAll("_", " "), "lbl-agent"); name.position.y = 2.35; group.add(name);
+  const bubbleEl = document.createElement("div"); bubbleEl.className = "bubble"; bubbleEl.style.opacity = 0;
+  const bubble = new CSS2DObject(bubbleEl); bubble.position.y = 3.0; group.add(bubble);
+  let thought = null;
+  if (isAdam) {
+    const el = document.createElement("div"); el.className = "bubble thought"; el.style.opacity = 0;
+    thought = new CSS2DObject(el); thought.position.set(0, 3.6, 0); group.add(thought);
+  }
+  agentsGroup.add(group);
+  return { group, body, bubble, thought, target: new THREE.Vector3(), bubbleUntil: 0 };
+}
+
+let lastSeq = 0;
+function updateAgents(data) {
+  const world = data.world, adamId = data.adam.id;
+  const byRoom = {};
+  world.agents.forEach((a, i) => {
+    if (!agents[a.id]) agents[a.id] = makeAgent(a, i, a.id === adamId);
+    const ag = agents[a.id];
+    if (a.id === adamId) ag.body.material.color.setHex(MOOD_COLORS[a.mood] ?? 0x9aa5b1);
+    const k = key(...a.pos);
+    const slot = (byRoom[k] = (byRoom[k] ?? -1) + 1);
+    const c = toScene(...a.pos);
+    let target = new THREE.Vector3(c.x + (slot % 2 ? 1.2 : -1.2) * Math.ceil(slot / 2), 0, c.z + 0.8);
+    // Adam walks up to whatever he just acted on
+    const act = data.adam.action;
+    if (a.id === adamId && act?.target && objectPos[`${k}:${act.target}`]) {
+      target = c.clone().lerp(objectPos[`${k}:${act.target}`], 0.72);
+    }
+    ag.target.copy(target);
+    if (!ag.placed) { ag.group.position.copy(target); ag.placed = true; }
+  });
+  for (const m of world.messages) {
+    if (m.seq <= lastSeq) continue;
+    lastSeq = m.seq;
+    const ag = agents[m.sender];
+    if (!ag) continue;
+    ag.bubble.element.textContent = `“${m.content}”`;
+    ag.bubble.element.style.opacity = 1;
+    ag.bubbleUntil = performance.now() + 7000;
+  }
+  const adam = agents[adamId];
+  if (adam?.thought) {
+    const busy = data.phase && !/complete|waiting/i.test(data.phase);
+    const act = data.adam.action;
+    const text = busy ? `💭 ${data.phase}` : act ? `💭 ${data.adam.reasoning || ""}` : "";
+    adam.thought.element.textContent = text;
+    adam.thought.element.style.opacity = text ? 1 : 0;
+  }
+}
+
+// ---------------------------------------------------------------- panel
+const $ = id => document.getElementById(id);
+const pct = v => `${Math.round(Math.max(0, Math.min(1, v)) * 100)}%`;
+let lastCycle = -1;
+const timeline = [];
+
+function updatePanel(data) {
+  const w = data.world, adam = w.agents.find(a => a.id === data.adam.id);
+  $("clock").textContent = `Cycle ${data.cycle} · ${w.time_of_day} · ${w.temperature}°C` +
+    (w.scenario ? ` · scenario: ${w.scenario}` : "");
+  $("phase").innerHTML = data.phase ? `Now: <b>${data.phase}</b>` : "";
+  if (!adam) return;
+  const moodColor = "#" + (MOOD_COLORS[adam.mood] ?? 0x9aa5b1).toString(16).padStart(6, "0");
+  $("moodDot").style.background = moodColor;
+  $("moodName").textContent = adam.mood;
+  $("moodBar").style.cssText = `width:${pct(adam.mood_intensity)};background:${moodColor}`;
+  $("moodVal").textContent = adam.mood_intensity.toFixed(2);
+  $("needs").innerHTML = Object.entries(adam.needs).map(([n, v]) => `
+    <div class="row"><span class="label">${n}</span>
+      <div class="bar"><span style="width:${pct(v)};background:${NEED_COLORS[n] || "#888"}"></span></div>
+      <span class="val ${v >= 0.6 ? "bad" : ""}">${v.toFixed(2)}</span></div>`).join("");
+  $("goal").innerHTML = adam.goal ? `<b>${adam.goal}</b>${adam.goal_step ? `<div class="reason">next: ${adam.goal_step}</div>` : ""}` : "none — following his needs";
+  $("inventory").innerHTML = adam.inventory.length
+    ? adam.inventory.map(i => `<span class="chip">${i.replaceAll("_", " ")}</span>`).join("") + (adam.wrapped ? `<span class="chip">wrapped in blanket</span>` : "")
+    : "nothing";
+  const act = data.adam.action, res = data.adam.result;
+  if (act) {
+    const rej = data.adam.rejected_decision;
+    $("action").innerHTML = `<span class="verb">${act.verb}${act.target ? " " + act.target : ""}</span>
+      <span class="${res?.success ? "ok" : "bad"}">${res?.success ? "✓" : "✗"}</span>
+      <div class="reason">${res?.reason || ""}</div>
+      ${data.adam.reasoning ? `<div class="reason">because: ${data.adam.reasoning}</div>` : ""}
+      ${rej ? `<div class="reason bad">wanted to ${rej.verb} ${rej.target ?? ""}: ${rej.reason}</div>` : ""}`;
+  }
+  $("impulses").innerHTML = data.adam.impulses.length
+    ? data.adam.impulses.map(i => `<span class="chip">${i.verb}${i.target ? " " + i.target : ""} · ${(i.urgency ?? 0).toFixed(2)}</span>`).join("")
+    : "—";
+  $("memories").innerHTML = data.adam.resonant_memories.length
+    ? data.adam.resonant_memories.slice(0, 4).map(m => `<li>${m}</li>`).join("") : `<li class="sub">nothing recalled</li>`;
+  if (data.cycle !== lastCycle && act) {
+    lastCycle = data.cycle;
+    timeline.unshift(`<li><span class="c">${data.cycle}</span><span class="${res?.success ? "ok" : "bad"}">${act.verb}${act.target ? " " + act.target : ""}</span> — ${res?.reason || ""}</li>`);
+    for (const e of data.events.filter(e => e.cycle === data.cycle)) timeline.unshift(`<li><span class="c">${e.cycle}</span>🌍 ${e.text}</li>`);
+    timeline.length = Math.min(timeline.length, 60);
+    $("timeline").innerHTML = timeline.join("");
+  }
+  const out = $("outcome");
+  if (data.outcome) {
+    out.style.display = "block";
+    out.style.background = data.outcome === "WIN" ? "#2f8f4e" : "#c0392b";
+    out.textContent = data.outcome === "WIN" ? "Scenario won" : "Scenario failed";
+  } else out.style.display = "none";
+}
+
+function applyLighting(world) {
+  const night = world.lighting === "night", evening = world.lighting === "evening";
+  const bg = night ? 0x0f1a2e : evening ? 0xf0c9a2 : 0xcfe3f2;
+  scene.background = new THREE.Color(bg);
+  document.body.style.background = "#" + bg.toString(16).padStart(6, "0");
+  document.body.classList.toggle("night", night);
+  hemi.intensity = night ? 0.35 : evening ? 0.8 : 1.0;
+  sun.intensity = night ? 0.25 : evening ? 0.9 : 1.4;
+  sun.color.setHex(night ? 0x8fa8ff : evening ? 0xffb37a : 0xffffff);
+  ground.material.color.setHex(night ? 0x223326 : 0xbfd3bf);
+}
+
+// ---------------------------------------------------------------- polling
+let paused = false, follow = true, firstFrame = true;
+const banner = $("banner");
+async function poll() {
+  if (!paused) {
+    try {
+      const r = await fetch(`${API}/world`, { cache: "no-store" });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || r.statusText);
+      banner.style.display = "none";
+      buildLayout(data.world, data.world.agents.find(a => a.id === data.adam.id));
+      updateAgents(data);
+      updatePanel(data);
+      applyLighting(data.world);
+      if (firstFrame) { resetView(); firstFrame = false; }
+    } catch (e) {
+      banner.style.display = "block";
+      banner.textContent = /waking/i.test(e.message) ? "Adam is waking up…"
+        : `Can't reach Adam (${e.message}). Start him with: python main.py --headless   (or --demo, no LLM needed)`;
+    }
+  }
+  setTimeout(poll, POLL_MS);
+}
+
+function resetView() {
+  const box3 = new THREE.Box3().setFromObject(layoutGroup);
+  const center = box3.isEmpty() ? new THREE.Vector3() : box3.getCenter(new THREE.Vector3());
+  const size = box3.isEmpty() ? 20 : box3.getSize(new THREE.Vector3()).length();
+  controls.target.copy(center);
+  camera.position.copy(center).add(new THREE.Vector3(size * 0.35, size * 0.75, size * 0.7));
+}
+$("reset").onclick = () => { follow = false; $("follow").classList.remove("on"); resetView(); };
+$("follow").onclick = e => { follow = !follow; e.target.classList.toggle("on", follow); };
+$("pause").onclick = e => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause"; e.target.classList.toggle("on", paused); };
+
+// ---------------------------------------------------------------- animation
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.1), now = performance.now();
+  for (const ag of Object.values(agents)) {
+    const p = ag.group.position, d = ag.target.clone().sub(p); d.y = 0;
+    const dist = d.length();
+    if (dist > 0.02) {
+      p.add(d.multiplyScalar(Math.min(1, dt * 2.2)));
+      ag.group.rotation.y = Math.atan2(ag.target.x - p.x, ag.target.z - p.z);
+      ag.body.position.y = 0.85 + Math.abs(Math.sin(now / 110)) * 0.08 * Math.min(1, dist);   // little walking bob
+    } else ag.body.position.y = 0.85;
+    if (ag.bubbleUntil && now > ag.bubbleUntil) { ag.bubble.element.style.opacity = 0; ag.bubbleUntil = 0; }
+  }
+  const adam = Object.values(agents).find(a => a.thought);
+  if (follow && adam) {
+    const shift = adam.group.position.clone().sub(controls.target).multiplyScalar(Math.min(1, dt * 2));
+    controls.target.add(shift); camera.position.add(shift);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  labels.render(scene, camera);
+}
+animate();
+poll();
+</script>
+</body>
+</html>

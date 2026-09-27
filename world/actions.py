@@ -17,6 +17,8 @@ class ActionHandlers:
         speaker = self.agents[agent_id]
         message = target or "..."
         self.message_seq += 1
+        self.speech_log.append({"seq": self.message_seq, "sender": agent_id, "content": message, "time": self.world_time})
+        del self.speech_log[:-20]
         listeners = [o for o_id, o in self.agents.items() if o_id != agent_id and o["pos"] == speaker["pos"]]
         if listeners:
             self._relieve(speaker, "loneliness", 0.3)

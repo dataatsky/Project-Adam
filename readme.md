@@ -29,11 +29,18 @@ This README provides everything you need to **understand, install, run, and anal
    python main.py --headless --cycles 10
    ```
 
-3. **Watch the GUI**:
+3. **Watch Adam in 3D**: open **http://127.0.0.1:8080/viewer** while `main.py` runs (headless or GUI).
 
-   * See impulses → imagination → reflection → decision → action.
-   * Observe hunger/stress change over time.
-   * Track storyline threads and insights.
+   * Rooms, doors and objects with their live state; Adam walks to whatever he acts on, colored by mood.
+   * Speech bubbles for everyone, a thought bubble with Adam's current step and reasoning.
+   * Side panel: mood, needs, goal, inventory, last action, impulses, recalled memories, timeline.
+
+   ```bash
+   python main.py --headless --demo                    # no LLM: a rule-based Adam, great for trying the viewer
+   python main.py --headless --scenario social_party   # watch him inside a benchmark scenario
+   ```
+
+4. **Or the Tk GUI** (`python main.py` without `--headless`): impulses → imagination → reflection → decision → action, KPIs and storyline threads.
 
 ---
 
@@ -229,6 +236,13 @@ The Flask service in `psyche_ollama.py`:
 *   **Goal lifecycle**: each reflection reports `goal_status`: `continue`, `completed`, or `abandoned`. Plans with steps also complete automatically when the last step succeeds (`go kitchen` counts as done once Adam arrives in the kitchen).
 *   **Skill Acquisition**: The `InsightEngine` tracks successful actions. "Mastered Skills" (high success rate) are fed back into the subconscious to encourage using known-good tools.
 *   **Theory of Mind**: when another agent is present, Adam models their beliefs and goals, again whenever they speak, and otherwise at most every `TOM_INTERVAL` cycles.
+*   **Needs**: hunger, fatigue, cold and loneliness (0 = fine, 1 = desperate). Fatigue rises every tick and sleep resets it
+    (sleeping also consolidates memories into insights); cold follows the room temperature (a blanket helps); loneliness
+    grows while alone and eases with talk, helping, or the radio. Urgent needs are flagged in the prompt.
+*   **Trust**: Theory-of-Mind judgements update each person's trust, threat and apparent goal, and the prompt shows them
+    ("liar (trust 0.3, seems like a threat)").
+*   **Long-term memory that matters**: actions that reveal something durable store a FACT ("The nightstand in the bedroom
+    contains: silver_key."); memory is searched with the goal and the surroundings, and both minds see what is recalled.
 *   **Temperament**: curiosity, bravery and caution (`AGENT_CURIOSITY`, … in `.env`) are described in words at the top of both prompts ("very curious, timid, cautious") and Adam is told how each trait shapes behaviour.
 *   **Moods**: a fixed vocabulary of 14 moods (`moods.py`), enforced by the response schema; synonyms such as "curiosity" or "resolve" are mapped onto it.
 
@@ -241,7 +255,14 @@ from needs and personality) and compares how they behave:
 python personality_experiment.py --presets curious cautious --runs 5 --cycles 15
 ```
 
-It reports, per preset, the mean ± sd of: **exploration** (moves into unvisited rooms), **coverage** (share of rooms
+`habits_experiment.py` runs one long, goal-free life (default 200 cycles, with memory) and reports, per window of cycles,
+how varied Adam's actions are, how many are new, and how much the mix drifts, plus his favourite actions and routines:
+
+```bash
+python habits_experiment.py --cycles 200 --preset curious
+```
+
+The personality experiment reports, per preset, the mean ± sd of: **exploration** (moves into unvisited rooms), **coverage** (share of rooms
 visited), **novelty** (distinct actions), **wait_ratio**, **social_ratio** and **success_rate**. Presets live in `personality.py`.
 
 ---
@@ -288,6 +309,13 @@ reproducible while runs still differ. Besides success rate, the summary reports 
 **rejected** (final decisions the world couldn't execute), **dropped** (impossible impulses), and **fallback** (LLM calls that failed).
 
 The benchmark runs the same `CognitiveLoop.step()` as the live simulation and reports Win/Loss % and average cycles.
+
+**Seeing why.** `--trace` (or `TRACE_PROMPTS=1`) stores each cycle's exact prompts and raw LLM replies, retries
+included, in the JSONL log next to the action taken.
+
+**Single-call mode.** `--single-call` (or `SINGLE_CALL=1`) asks for impulses and the decision in one LLM call, roughly
+halving time per cycle. The decision can't see simulated outcomes, so it is less deliberate; results record `single_call`
+so these scores are never mixed with normal ones.
 
 **Speed.** Each cycle makes two LLM calls (subconscious + reflection). The benchmark skips the third, the LLM’s
 imagined outcome, because the world simulation already shows Adam what each option really does. Add `--imagine` to include it.

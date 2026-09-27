@@ -19,6 +19,9 @@ def main(argv: list[str] | None = None):
     parser.add_argument("--cycles", type=int, default=0, help="Headless: stop after N cycles (0 = run forever)")
     parser.add_argument("--trace", action="store_true", help="Log each cycle's prompts and raw LLM replies (large)")
     parser.add_argument("--single-call", action="store_true", help="One LLM call per cycle (faster, less deliberate)")
+    parser.add_argument("--scenario", help="Run Adam inside a benchmark scenario (e.g. social_party) instead of the apartment")
+    parser.add_argument("--demo", action="store_true", help="Rule-based psyche instead of the LLM (no Ollama needed; for the viewer)")
+    parser.add_argument("--cycle-sleep", type=float, help="Seconds between cycles (default CYCLE_SLEEP, or 1.5 with --demo)")
     args = parser.parse_args(argv)
 
     # Configure logging before anything starts, so startup and first-cycle records aren't lost
@@ -41,20 +44,42 @@ def main(argv: list[str] | None = None):
         chroma_collection=getattr(config, 'CHROMA_COLLECTION', config.PINECONE_INDEX_NAME or 'adam-memory'),
         batch_size=getattr(config, 'MEMORY_UPSERT_BATCH', 5),
     )
-    memory_store.ensure_foundational_memories()
-    psyche = PsycheClient(
-        config.PSYCHE_LLM_API_URL,
-        timeout=config.PSYCHE_TIMEOUT,
-        retries=config.PSYCHE_RETRIES,
-        backoff=config.PSYCHE_BACKOFF,
-    )
+    if args.demo:
+        # Demo Adam's actions shouldn't end up in the real long-term memory
+        from services.demo_psyche import DemoPsyche
+        psyche, memory_store = DemoPsyche(), None
+    else:
+        memory_store.ensure_foundational_memories()
+        psyche = PsycheClient(
+            config.PSYCHE_LLM_API_URL,
+            timeout=config.PSYCHE_TIMEOUT,
+            retries=config.PSYCHE_RETRIES,
+            backoff=config.PSYCHE_BACKOFF,
+        )
+
+    scenario_config = None
+    world_factory = None
+    if args.scenario:
+        from scenario_runner import load_scenario
+        from text_world import TextWorld
+        scenario_config = load_scenario(args.scenario).CONFIG
+        world_factory = lambda: TextWorld(seed=0, scenario_config=scenario_config)  # noqa: E731
+    cycle_sleep = args.cycle_sleep if args.cycle_sleep is not None else (1.5 if args.demo else None)
+
+    def make_brain(ui):
+        brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=ui, memory=memory_store, psyche=psyche,
+                              world_factory=world_factory)
+        brain.trace = args.trace or brain.trace
+        brain.single_call = args.single_call or brain.single_call
+        brain.scenario_config = scenario_config
+        if cycle_sleep is not None:
+            brain.set_cycle_sleep(cycle_sleep)
+        return brain
 
     # Headless or UI mode
     if args.headless:
         ui = None
-        brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=ui, memory=memory_store, psyche=psyche)
-        brain.trace = args.trace or brain.trace
-        brain.single_call = args.single_call or brain.single_call
+        brain = make_brain(ui)
         security = get_runtime(brain, psyche)
         if getattr(security, "enabled", False):
             brain.attach_security(security)
@@ -70,6 +95,7 @@ def main(argv: list[str] | None = None):
         flask_thread.start()
 
         logging.getLogger(__name__).info(f"Headless mode running. State API: http://127.0.0.1:{args.api_port}/get_state, Metrics: /metrics")
+        print(f"3D viewer: http://127.0.0.1:{args.api_port}/viewer")
         print("Press Ctrl+C to stop.")
         try:
             while True:
@@ -105,9 +131,7 @@ def main(argv: list[str] | None = None):
         logging.getLogger().addHandler(tk_handler)
 
         # Start cognitive loop
-        brain = CognitiveLoop(config.LOG_FILE, LOG_HEADERS, ui=app_gui, memory=memory_store, psyche=psyche)
-        brain.trace = args.trace or brain.trace
-        brain.single_call = args.single_call or brain.single_call
+        brain = make_brain(app_gui)
         security = get_runtime(brain, psyche)
         if getattr(security, "enabled", False):
             brain.attach_security(security)
@@ -124,6 +148,7 @@ def main(argv: list[str] | None = None):
         flask_thread.start()
 
         logging.getLogger(__name__).info(f"Psyche Monitor running. State API: http://127.0.0.1:{args.api_port}/get_state, Metrics: /metrics")
+        print(f"3D viewer: http://127.0.0.1:{args.api_port}/viewer")
         root.mainloop()
 
 

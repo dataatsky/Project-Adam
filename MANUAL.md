@@ -61,6 +61,13 @@ python main.py
     *   **Vitals**: Hunger, Mood, Goal.
     *   **Tabs**: Inspect internal state (Impulses, Reflections, Plans).
 
+### 2b. Watch in 3D
+While Adam runs, open **http://127.0.0.1:8080/viewer** (the port is `--api-port`). The page polls `/world` once a second.
+*   `python main.py --headless --demo`: a rule-based Adam, no Ollama needed (demo actions are not stored in long-term memory).
+*   `python main.py --headless --scenario locked_room`: watch a benchmark scenario; a banner shows WIN/FAIL.
+*   `--cycle-sleep 1` speeds up the pace; `--trace` and `--single-call` work here too.
+*   The page loads three.js from the jsDelivr CDN, so it needs an internet connection.
+
 ### 3. Start the Agent (Headless Mode)
 Ideal for long runs or background execution without window management.
 

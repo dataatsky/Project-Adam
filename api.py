@@ -1,7 +1,10 @@
-from flask import Flask, jsonify
 import logging
+import os
+
+from flask import Flask, jsonify, send_from_directory
 
 log = logging.getLogger(__name__)
+VIEWER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "viewer")
 
 
 def _brain_state(brain, full: bool = True) -> dict:
@@ -43,6 +46,19 @@ def create_app(get_brain):
     @app.get("/get_state")
     def get_state():
         return _respond(get_brain, full=True)
+
+    @app.get("/world")
+    def world():
+        """Everything the 3D viewer draws: the world snapshot plus Adam's latest thinking."""
+        brain = get_brain()
+        snapshot = getattr(brain, "snapshot", None) if brain else None
+        if not snapshot:
+            return jsonify({"error": "Adam is waking up; no world snapshot yet"}), 503
+        return jsonify({**snapshot, "phase": getattr(brain, "phase", ""), "cycle": getattr(brain, "cycle_counter", 0)})
+
+    @app.get("/viewer")
+    def viewer():
+        return send_from_directory(VIEWER_DIR, "index.html")
 
     return app
 

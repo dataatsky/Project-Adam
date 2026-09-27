@@ -49,6 +49,8 @@ class TextWorld(ActionHandlers):
         self.scenario_name: Optional[str] = None
         # Global order of spoken messages, so conversations can be checked turn by turn
         self.message_seq = 0
+        # Everything said recently, heard or not (for viewers)
+        self.speech_log: List[Dict] = []
 
         # Initialize Grid
         self.map = GridMap()
@@ -802,6 +804,41 @@ class TextWorld(ActionHandlers):
             where = f"the {source} in the {room}" if source else f"the {room}"
             facts.append(f"I found the {item} in {where}.")
         return facts
+
+    # ------------------------------------------------------------------
+    def snapshot(self) -> Dict:
+        """The whole world as plain JSON-able data (for the 3D viewer and other observers)."""
+        rooms = []
+        for (x, y), loc in self.map.grid.items():
+            objects = [
+                {"name": name, "state": obj.get("state"), "type": obj.get("type"),
+                 "properties": list(obj.get("properties", [])), "items": list(obj.get("items", []))}
+                for name, obj in loc.objects.items() if isinstance(obj, dict) and "lockable" not in obj.get("properties", [])
+            ]
+            rooms.append({"x": x, "y": y, "name": loc.name, "description": loc.description, "objects": objects})
+        doors = []
+        for edge, door in self.map.doors.items():
+            a, b = sorted(edge)
+            doors.append({"a": list(a), "b": list(b), "state": door.get("state")})
+        agents = []
+        for agent_id, a in self.agents.items():
+            goal = a["active_goal"]
+            step = self._current_goal_step(agent_id)
+            agents.append({
+                "id": agent_id, "pos": list(a["pos"]), "mood": a["mood"], "mood_intensity": a["mood_intensity"],
+                "needs": {need: a.get(need, 0.0) for need in NEEDS}, "inventory": list(a["inventory"]),
+                "goal": goal["name"] if goal else None, "goal_step": step.get("desc") if step else None,
+                "control_type": a["control_type"], "wrapped": bool(a.get("wrapped")),
+                "visited": [list(p) for p in a.get("visited", ())],
+            })
+        return {
+            "time": self.world_time, "time_of_day": self.time_of_day(), "lighting": self.lighting,
+            "temperature": round(self.temperature, 1), "noise": round(self.noise_level, 2),
+            "neighbor_awaiting_help": bool(self.neighbor_state.get("awaiting_help")),
+            "relationships": {k: dict(v) for k, v in self.relationships.items()},
+            "scenario": self.scenario_name, "rooms": rooms, "doors": doors, "agents": agents,
+            "messages": list(self.speech_log[-10:]),
+        }
 
     # ------------------------------------------------------------------
     def _current_goal_step(self, agent_id: str) -> Optional[Dict]:

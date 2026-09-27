@@ -76,6 +76,14 @@ class CognitiveLoop:
         # Exact prompts and raw LLM replies of this cycle, when tracing is on
         self.trace = bool(getattr(config, "TRACE_PROMPTS", False))
         self._cycle_trace: list[dict] = []
+        # What observers (the API and 3D viewer) see: rebuilt on the loop thread after each cycle
+        self.phase = "Starting…"
+        self.snapshot: Optional[dict] = None
+        self.last_action: Optional[dict] = None
+        self.last_reasoning = ""
+        self.last_result: dict = {}
+        self.recent_events: list[dict] = []
+        self.scenario_config: Optional[dict] = None  # set when running a scenario live, to show WIN/FAIL
         # One LLM call per cycle instead of two or three (see think_once); opt-in
         self.single_call = bool(getattr(config, "SINGLE_CALL", False))
         # Plumbing health, reported by benchmark.py: how often the LLM's output had to be corrected or replaced
@@ -160,6 +168,7 @@ class CognitiveLoop:
 
     # helpers to touch UI
     def _ui_status(self, txt):
+        self.phase = txt
         if self.ui:
             self.ui.set_status(txt)
 
@@ -622,8 +631,10 @@ class CognitiveLoop:
             result = self.act(world, action, reasoning, full, impulses)
         else:
             self.log.info("Orient failed or empty; waiting.")
-            action = dict(WAIT_ACTION)
-            result = self.act(world, action, "No impulses", full, {})
+            action, reasoning = dict(WAIT_ACTION), "No impulses"
+            result = self.act(world, action, reasoning, full, {})
+        self.last_action, self.last_reasoning, self.last_result = action, reasoning, result
+        self.publish_snapshot(world)
         # try flushing any pending memory writes periodically
         try:
             if self.memory and hasattr(self.memory, "flush"):
@@ -642,6 +653,8 @@ class CognitiveLoop:
                 continue
             for event in world.update():
                 self.log.info(f"World: {event}")
+                self.recent_events = (self.recent_events + [{"cycle": self.cycle_counter + 1, "text": event}])[-15:]
+            self.publish_snapshot(world)
             self.step(world)
             self.log.info("— Cycle complete. Waiting … —")
             self._ui_status("Cycle complete. Waiting…")
@@ -685,6 +698,31 @@ class CognitiveLoop:
         """Add to short-term memory (what the next reflection sees)."""
         self.recent_memories.append(text)
         del self.recent_memories[:-keep]
+
+    def publish_snapshot(self, world: Optional[TextWorld] = None):
+        """Rebuild what observers see. Called on the loop thread, so readers never see a half-updated world."""
+        world = world or self.world
+        if world is None:
+            return
+        impulses = sorted(self.last_impulses or [], key=lambda i: i.get("urgency", 0), reverse=True)[:3]
+        self.snapshot = {
+            "world": world.snapshot(),
+            "adam": {
+                "id": self.agent_id,
+                "action": self.last_action,
+                "reasoning": self.last_reasoning,
+                "result": {k: self.last_result.get(k) for k in ("success", "reason")} if self.last_result else None,
+                "impulses": [{k: i.get(k) for k in ("verb", "target", "urgency", "drive")} for i in impulses],
+                "dropped_impulses": list(self._cycle_dropped),
+                "rejected_decision": self._cycle_rejected,
+                "resonant_memories": list(self.last_resonant_memories),
+                "kpis": self.insight.compute_kpis() if self.insight else {},
+            },
+            "events": list(self.recent_events),
+        }
+        if self.scenario_config:
+            from scenario_runner import outcome
+            self.snapshot["outcome"] = outcome(self.scenario_config, world)
 
     def _call_options(self) -> dict:
         """Per-call options for the psyche: the cycle's seed, and tracing when enabled."""
