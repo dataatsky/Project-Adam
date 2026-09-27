@@ -153,3 +153,26 @@ def test_memory_store_chroma_backend(monkeypatch, tmp_path):
         assert res[0] in {"foundational", "hello world"}
     assert recorded["collection_name"] == "adam-memory"
     assert recorded["model_name"] == "all-mpnet-base-v2"
+
+
+def test_memory_store_warns_once_when_disabled(caplog):
+    store = memory_store.MemoryStore(
+        api_key=None, environment=None, index_name="adam-memory", model_name=None, backend="chroma",
+    )
+    with caplog.at_level("WARNING"):
+        store.upsert_texts(["a"])
+        store.query_similar_texts("a")
+        assert not store.enabled
+    warnings = [r for r in caplog.records if "LONG-TERM MEMORY DISABLED" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "SENTENCE_MODEL" in warnings[0].getMessage()
+
+
+def test_memory_store_none_backend_is_silent_noop(caplog):
+    store = memory_store.MemoryStore(
+        api_key=None, environment=None, index_name="adam-memory", model_name="unused", backend="none",
+    )
+    with caplog.at_level("WARNING"):
+        store.upsert_texts(["a"])
+        assert store.query_similar_texts("a") == []
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
