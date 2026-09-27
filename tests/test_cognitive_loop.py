@@ -190,3 +190,40 @@ def test_benchmark_path_wins_with_scripted_psyche(brain_factory):
     episode = run_episode(config, lambda world, _c: brain.step(world))
     assert episode["outcome"] == "WIN"
     assert episode["cycles"] == 2
+
+
+class StatelessHungerPsyche(FakePsyche):
+    """Decides from the payload alone, so one instance can serve parallel runs."""
+
+    def generate_impulse(self, payload):
+        here = payload["world_state"]["agent_location"]
+        action = {"verb": "eat", "target": "fridge"} if here == "kitchen" else {"verb": "go", "target": "north"}
+        return {"emotional_shift": {}, "impulses": [{**action, "urgency": 0.9}]}
+
+    def imagine_batch(self, actions):
+        raise AssertionError("LLM imagination should be skipped")
+
+    def reflect(self, payload):
+        return {"final_action": payload["hypothetical_outcomes"][0]["action"], "reasoning": "follow the plan"}
+
+
+def test_loop_can_skip_llm_imagination(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = brain_factory(StatelessHungerPsyche())
+    brain.imagine_with_llm = False
+    brain.step(world)
+    hypo = brain.last_hypothetical[0]
+    assert hypo["imagined"] is None
+    assert "walked north" in hypo["simulated"]  # the world simulation still runs
+
+
+def test_benchmark_runs_episodes_in_parallel(tmp_path):
+    from benchmark import run_benchmark
+
+    rates = run_benchmark(
+        ["hunger_test"], runs=4, parallel=2,
+        psyche=StatelessHungerPsyche(), log_file=str(tmp_path / "bench.csv"),
+    )
+    assert rates == {"hunger_test": 100.0}
+    lines = (tmp_path / "bench.csv").read_text().strip().splitlines()
+    assert len(lines) == 1 + 4 * 2  # header + 4 runs x 2 cycles, no interleaved rows

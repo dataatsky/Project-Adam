@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from typing import Optional, Callable
 import copy
@@ -10,6 +11,9 @@ from text_world import TextWorld, normalize_verb, NULL_TARGETS
 from loop.insight_engine import InsightEngine
 
 WAIT_ACTION = {"verb": "wait", "target": None}
+
+# Parallel benchmark runs share one CSV log
+_CSV_LOCK = threading.Lock()
 
 
 class CognitiveLoop:
@@ -52,6 +56,8 @@ class CognitiveLoop:
         self.last_hypothetical = []
         self.world_factory = world_factory or TextWorld
         self.imagine_top_k = int(getattr(config, "IMAGINE_TOP_K", 3))
+        # When False, skip the LLM's guess and rely on the world simulation alone (one fewer LLM call per cycle)
+        self.imagine_with_llm = bool(getattr(config, "IMAGINE_WITH_LLM", True))
         self.tom_interval = int(getattr(config, "TOM_INTERVAL", 5))
         try:
             self.cycle_sleep = float(getattr(config, "CYCLE_SLEEP", 5.0))
@@ -121,7 +127,7 @@ class CognitiveLoop:
     def log_cycle_data(self, cycle_data):
         import csv
         try:
-            with open(self.log_filename, mode="a", newline="", encoding="utf-8") as f:
+            with _CSV_LOCK, open(self.log_filename, mode="a", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=self.log_headers)
                 if f.tell() == 0:
                     writer.writeheader()
@@ -270,7 +276,9 @@ class CognitiveLoop:
         ]
 
         # Parallel Imagination (Batch Call)
-        if self.psyche and actions_to_imagine:
+        if not self.imagine_with_llm:
+            imagined_results = [None] * len(actions_to_imagine)
+        elif self.psyche and actions_to_imagine:
             imagined_results = self.psyche.imagine_batch(actions_to_imagine)
         else:
             imagined_results = ["My imagination is fuzzy." for _ in actions_to_imagine]
@@ -280,7 +288,7 @@ class CognitiveLoop:
             sim = world.clone().process_action(action, agent_id=self.agent_id)
             hypothetical.append({
                 "action": action,
-                "imagined": imagined_results[i] if i < len(imagined_results) else "Error",
+                "imagined": imagined_results[i] if i < len(imagined_results) else None,
                 "simulated": sim.get("reason"),
             })
         self.last_hypothetical = hypothetical
@@ -393,10 +401,12 @@ class CognitiveLoop:
         kpis = self.insight.compute_kpis()
         imagined_texts = []
         for hypo in self.last_hypothetical or []:
+            if not hypo.get('imagined'):
+                continue
             act = hypo.get('action', {}) or {}
             verb = act.get('verb') or 'wait'
             tgt = act.get('target') or 'null'
-            imagined_texts.append(f"{verb} {tgt}: {hypo.get('imagined', '')}")
+            imagined_texts.append(f"{verb} {tgt}: {hypo['imagined']}")
         imagined_join = "; ".join(filter(None, imagined_texts))
         causal = self.insight.causal_line(triggers=triggers, impulses=imps, action=action, imagined=imagined_join, simulated=result.get('reason', ''), emotional_delta=emotional_delta)
         cards = self.insight.cards(triggers=triggers, kpis=kpis, chosen=action, imagined=imagined_join, simulated=result.get('reason', ''), emotional_delta=emotional_delta)

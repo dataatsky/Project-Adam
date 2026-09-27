@@ -242,10 +242,16 @@ Adam’s decision-making is measured with standardized **scenarios** (`scenarios
 
 ```bash
 python benchmark.py --scenario hunger_test --runs 10
-python benchmark.py --scenario all --runs 3
+python benchmark.py --scenario all --runs 3 --parallel 2
 ```
 
 The benchmark runs the same `CognitiveLoop.step()` as the live simulation and reports Win/Loss % and average cycles.
+
+**Speed.** Each cycle makes two LLM calls (subconscious + reflection). The benchmark skips the third, the LLM’s
+imagined outcome, because the world simulation already shows Adam what each option really does. Add `--imagine` to include it.
+`--parallel N` runs N episodes at once. Ollama only serves requests concurrently if `OLLAMA_NUM_PARALLEL` is at least N
+(on macOS with Ollama.app: `launchctl setenv OLLAMA_NUM_PARALLEL 2`, then quit and reopen Ollama). Otherwise the requests just queue.
+On a 16 GB machine, keep N at 2 and run a single Ollama server.
 
 Each scenario also declares a scripted `SOLUTION` and `FAILURE`. `tests/test_scenarios.py` plays both without any LLM and fails
 if a scenario can’t be won, can’t be lost, or its solution relies on an action the world rejects. A benchmark number

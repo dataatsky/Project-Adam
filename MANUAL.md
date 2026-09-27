@@ -83,9 +83,18 @@ The `benchmark.py` tool loads a scenario, creates a pristine world, and runs the
 # Run the 'Hunger Test' 5 times
 python benchmark.py --scenario hunger_test --runs 5
 
-# Run every scenario
-python benchmark.py --scenario all --runs 3
+# Run every scenario, two episodes at a time
+python benchmark.py --scenario all --runs 3 --parallel 2
+
+# Include the LLM's imagined outcome in each cycle (slower; on by default in live runs)
+python benchmark.py --scenario hunger_test --imagine
 ```
+
+**Making it faster**
+*   Run **one** Ollama server. Ollama.app and `brew services` together each load their own copy of the model and push a 16 GB Mac into swap.
+*   `--parallel 2` needs the server to accept two requests at once: `launchctl setenv OLLAMA_NUM_PARALLEL 2`, then quit and reopen Ollama.app
+    (Homebrew service: add `OLLAMA_NUM_PARALLEL=2` to its environment and `brew services restart ollama`).
+*   A smaller model is faster but decides worse; compare scores only within one model.
 
 ### 2. Available Scenarios
 Scenarios are located in the `scenarios/` directory.
@@ -97,11 +106,13 @@ Scenarios are located in the `scenarios/` directory.
 
 ### 3. Interpreting Output
 ```text
-Run 1/5... [WIN] in 8 cycles.
-Run 2/5... [WIN] in 6 cycles.
+hunger_test        run 1/5: [WIN] in 4 cycles (70s)
+hunger_test        run 2/5: [WIN] in 6 cycles (102s)
 ...
-Success Rate: 100.0% (5/5)
-Avg Cycles (Wins): 7.0
+--- Summary ---
+hunger_test        success 100.0% (5/5) | avg cycles (wins)  5.0
+
+Total time: 7.5 min
 ```
 *   **High Success Rate**: Reliable planning and agency.
 *   **Low Cycle Count**: Efficient intelligence (didn't wander aimlessly).
