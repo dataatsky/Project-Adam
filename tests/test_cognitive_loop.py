@@ -223,6 +223,7 @@ def test_benchmark_runs_episodes_in_parallel(tmp_path):
     rates = run_benchmark(
         ["hunger_test"], runs=4, parallel=2,
         psyche=StatelessHungerPsyche(), log_file=str(tmp_path / "bench.csv"),
+        results_path=str(tmp_path / "results.jsonl"),
     )
     assert rates == {"hunger_test": 100.0}
     lines = (tmp_path / "bench.csv").read_text().strip().splitlines()
