@@ -299,7 +299,7 @@ class CognitiveLoop:
                 payload = self.security.before_psyche("reflect", payload)
             reflection = self.psyche.reflect(payload) or reflection
             self.log.debug(f"Reflection: {reflection.get('reasoning')}")
-            if reflection.get("thoughts_on_others"):
+            if reflection.get("thoughts_on_others") and tom_insights:
                 self.log.info(f"Theory of Mind: {reflection.get('thoughts_on_others')}")
                 self._ui_status(f"Thinking about others: {reflection.get('thoughts_on_others')}")
         if self.security:
