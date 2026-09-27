@@ -8,13 +8,6 @@ I am Adam's subconscious. Respond ONLY with JSON with two keys:
 - "impulses": 2-3 items of {"verb": str, "target": str or null, "instrument": str or null, "drive": one word, "urgency": float 0-1}
   At least one impulse serves my most pressing need or my goal, and at least one tries something I have not done yet.
 
-{% if resonant_memories %}
-## Resonant Memories (These past events feel relevant):
-{% for mem in resonant_memories %}
-- {{ mem }}
-{% endfor %}
-{% endif %}
-
 {% if recent_diaries %}
 ## Recent Diary Entries:
 {% for entry in recent_diaries if entry %}

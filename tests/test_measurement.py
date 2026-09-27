@@ -172,3 +172,56 @@ def test_memory_benchmark_runs_training_scored_and_control(tmp_path):
     (row,) = read_results(str(results), kind="benchmark")
     assert rates == {"remembered_key": 100.0}           # remembers the nightstand: 3 cycles
     assert row["without_memory"] == {"wins": 0, "n": 1}  # blind search can't finish in 4 cycles
+
+
+# --- memory that changes behaviour ---------------------------------------------
+
+def test_world_reports_facts_worth_remembering():
+    from text_world import TextWorld
+
+    world = TextWorld(scenario_config=load_scenario("remembered_key").CONFIG)
+    assert world.process_action({"verb": "go", "target": "east"})["facts"] == ["Going east from the hall leads to the bedroom."]
+    assert world.process_action({"verb": "open", "target": "wardrobe"})["facts"] == ["The wardrobe in the bedroom is empty."]
+    assert world.process_action({"verb": "open", "target": "nightstand"})["facts"] == ["The nightstand in the bedroom contains: silver_key."]
+    assert world.process_action({"verb": "take", "target": "silver_key"})["facts"] == ["I found the silver_key in the nightstand in the bedroom."]
+    assert "facts" not in world.process_action({"verb": "wait"})
+
+
+def test_loop_stores_facts_queries_by_goal_and_shares_recall_with_reflection(tmp_path):
+    from constants import LOG_HEADERS
+    from loop.cognitive_loop import CognitiveLoop
+    from text_world import TextWorld
+
+    class SpyMemory(KeywordMemory):
+        queries = []
+
+        def query_similar_texts(self, text, top_k=3):
+            self.queries.append(text)
+            return super().query_similar_texts(text, top_k)
+
+    memory = SpyMemory()
+    memory.upsert_texts(["FACT: I found the silver_key in the nightstand in the bedroom."])
+    world = TextWorld(scenario_config=load_scenario("remembered_key").CONFIG)
+    psyche = FakePsyche(decisions=[{"verb": "go", "target": "east"}])
+    brain = CognitiveLoop(str(tmp_path / "l.jsonl"), LOG_HEADERS, psyche=psyche, memory=memory)
+    brain.step(world)
+    assert memory.queries[0] == "Find the silver key"  # the goal itself is a query
+    recalled = psyche.reflect_payloads[0]["resonant_memories"]
+    assert recalled[0].startswith("FACT: I found the silver_key")  # the deciding mind sees it too
+    assert "FACT: Going east from the hall leads to the bedroom." in memory.texts
+
+
+def test_recalled_memories_are_in_the_shared_prompt_prefix(monkeypatch):
+    import os
+    import psyche_ollama as appmod
+
+    prompts = []
+    monkeypatch.setattr(appmod, "_structured", lambda p, m, e, seed=None: prompts.append(p) or m.model_validate(
+        {"emotional_shift": {}, "impulses": []} if m is appmod.GenerateImpulseResponse
+        else {"final_action": {"verb": "wait"}, "reasoning": "ok"}))
+    client = appmod.app.test_client()
+    memories = ["FACT: I found the silver_key in the nightstand in the bedroom."]
+    client.post("/generate_impulse", json={"current_state": {}, "world_state": {}, "resonant_memories": memories})
+    client.post("/reflect", json={"current_state": {}, "world_state": {}, "hypothetical_outcomes": [],
+                                  "resonant_memories": memories})
+    assert memories[0] in os.path.commonprefix(prompts)

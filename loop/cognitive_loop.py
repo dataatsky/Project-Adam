@@ -204,12 +204,20 @@ class CognitiveLoop:
         location = world_state.get("agent_location") or "Unknown"
 
         # Contextual retrieval: query memory with location, goal and salient objects
-        objects_query = " ".join([f"{e.get('type','')} {e.get('object','')}" for e in sensory if 'object' in e])
-        query_text = f"Context: {location}, Goal: {current_goal}. Sensory: {objects_query}"
+        objects_query = ", ".join(e.get("object", "") for e in sensory if e.get("object"))
+        # Ask memory about the goal itself ("Find the silver key") and about the surroundings
+        queries = []
+        if current_goal and current_goal != "None":
+            queries.append(current_goal)
+        queries.append(f"I am in the {location}. I notice {objects_query or 'nothing in particular'}.")
         self.last_resonant_memories = []
         try:
             if self.memory:
-                self.last_resonant_memories = self.memory.query_similar_texts(query_text, top_k=3)
+                for query in queries:
+                    for mem in self.memory.query_similar_texts(query, top_k=3):
+                        if mem not in self.last_resonant_memories:
+                            self.last_resonant_memories.append(mem)
+                self.last_resonant_memories = self.last_resonant_memories[:5]
                 self.log.debug(f"Resonant memories: {self.last_resonant_memories}")
         except Exception:
             self.last_resonant_memories = []
@@ -327,6 +335,7 @@ class CognitiveLoop:
             "world_state": self.current_world_state,
             "hypothetical_outcomes": hypothetical,
             "recent_memories": self.recent_memories + tom_insights,
+            "resonant_memories": self.last_resonant_memories,
             "repetitions": self._repetitions(),
             "waiting": self._waiting(),
         }
@@ -415,10 +424,10 @@ class CognitiveLoop:
             f"{decision_str}. {'The result was: ' if result.get('success') else 'But it failed because '}" + reason
         )
         self._remember(event_desc)
-        # Store vector memory
+        # Store vector memory: the narrative, plus any durable facts the action revealed
         try:
             if self.memory:
-                self.memory.upsert_texts([event_desc])
+                self.memory.upsert_texts([event_desc] + [f"FACT: {fact}" for fact in result.get("facts", [])])
                 self.memory_id_counter += 1
         except Exception as e:
             self.log.warning(f"Memory upsert error: {e}")

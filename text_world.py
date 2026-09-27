@@ -827,6 +827,13 @@ class TextWorld:
             agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
             return {"success": False, "reason": why}
 
+        room_before = self.map.get_location(*agent["pos"])
+        contents_before = {
+            name: list(obj.get("items", [])) for name, obj in (room_before.objects if room_before else {}).items()
+            if isinstance(obj, dict)
+        }
+        inventory_before = list(agent["inventory"])
+
         if verb == "wait":
             result = {"success": True, "reason": "Time passes."}
         elif verb == "inventory":
@@ -845,7 +852,40 @@ class TextWorld:
             result = handler(target, obj, props, state, instrument=instrument, agent=agent)
         if self._update_goal_progress(verb, target, result.get("success", False), agent_id):
             result["goal_advanced"] = True
+        if result.get("success"):
+            facts = self._learned_facts(verb, target, agent, room_before, contents_before, inventory_before)
+            if facts:
+                result["facts"] = facts
         return result
+
+    def _learned_facts(self, verb, target, agent, room_before, contents_before, inventory_before) -> List[str]:
+        """Short, durable facts an action revealed (worth keeping in long-term memory).
+
+        e.g. "The nightstand in the bedroom contains: silver_key." or
+             "Going east from the hall leads to the bedroom."
+        """
+        facts = []
+        room = room_before.name if room_before else "void"
+        if verb == "go":
+            here = self.map.get_location(*agent["pos"])
+            if here and room_before and here is not room_before:
+                facts.append(f"Going {target} from the {room} leads to the {here.name}.")
+        if verb in {"open", "examine"} and room_before:
+            obj = room_before.objects.get(target)
+            if isinstance(obj, dict) and obj.get("state") == "open" or (verb == "examine" and isinstance(obj, dict) and "openable" not in obj.get("properties", [])):
+                items = obj.get("items") if isinstance(obj, dict) else None
+                if items:
+                    facts.append(f"The {target} in the {room} contains: {', '.join(items)}.")
+                elif items is not None and verb == "open":
+                    facts.append(f"The {target} in the {room} is empty.")
+        for item in agent["inventory"]:
+            if item in inventory_before:
+                continue
+            source = next((c for c, before in contents_before.items()
+                           if item in before and item not in (room_before.objects.get(c) or {}).get("items", [])), None)
+            where = f"the {source} in the {room}" if source else f"the {room}"
+            facts.append(f"I found the {item} in {where}.")
+        return facts
 
     # ------------------------------------------------------------------
     def _act_say(self, target: Optional[str], agent_id: str) -> Dict:

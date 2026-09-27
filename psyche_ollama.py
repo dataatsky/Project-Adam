@@ -108,6 +108,7 @@ class ReflectRequest(BaseModel):
     world_state: Dict[str, Any] = {}
     hypothetical_outcomes: List[Dict[str, Any]]
     recent_memories: List[str] = []
+    resonant_memories: List[str] = []  # long-term memories recalled this cycle (same as the impulse call)
     repetitions: List[str] = []
     waiting: Optional[str] = None
     seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
@@ -292,6 +293,7 @@ def reflect():
             current_state=data['current_state'],
             world_state=data['world_state'],
             recent_memories=data['recent_memories'],
+            resonant_memories=data['resonant_memories'],
             hypothetical_outcomes=data['hypothetical_outcomes'],
             failed_actions_summary=get_failed_actions_summary(data['recent_memories']),
             repetitions=data['repetitions'],
