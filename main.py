@@ -47,10 +47,10 @@ def main(argv: list[str] | None = None):
     )
     memory_store.ensure_foundational_memories()
     psyche = PsycheClient(
-        getattr(config, 'PSYCHE_LLM_API_URL', 'http://127.0.0.1:5000/'),
-        timeout=getattr(config, 'PSYCHE_TIMEOUT', 30),
-        retries=getattr(config, 'PSYCHE_RETRIES', 2),
-        backoff=getattr(config, 'PSYCHE_BACKOFF', 0.5),
+        config.PSYCHE_LLM_API_URL,
+        timeout=config.PSYCHE_TIMEOUT,
+        retries=config.PSYCHE_RETRIES,
+        backoff=config.PSYCHE_BACKOFF,
     )
 
     # Configure logging level
