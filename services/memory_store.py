@@ -83,11 +83,32 @@ class MemoryStore:
         self._chroma_client = None
         self._chroma_collection_handle = None
 
+    def _warn_disabled(self, why: str):
+        """Say once, loudly, that Adam is running without long-term memory."""
+        if getattr(self, "_disabled_warned", False):
+            return
+        self._disabled_warned = True
+        self.log.warning(f"LONG-TERM MEMORY DISABLED: {why}. Adam will not recall past experiences.")
+
+    @property
+    def enabled(self) -> bool:
+        self._ensure_ready()
+        store = self.index if self._backend == "pinecone" else self._chroma_collection_handle
+        return bool(self.model) and store is not None
+
     def _ensure_ready(self):
+        if self._backend == "none":
+            if not getattr(self, "_disabled_warned", False):
+                self._disabled_warned = True
+                self.log.info("Long-term memory turned off (MEMORY_BACKEND=none).")
+            return
         # Initialize model lazily
-        if self.model is None:
-            try:
-                if self._model_name:
+        if self.model is None and not getattr(self, "_model_failed", False):
+            if not self._model_name:
+                self._model_failed = True
+                self._warn_disabled("SENTENCE_MODEL is not set")
+            else:
+                try:
                     self.model = SentenceTransformer(self._model_name)
                     self.log.info("SentenceTransformer model loaded")
                     try:
@@ -95,20 +116,23 @@ class MemoryStore:
                         self.dimension = dim
                     except Exception:
                         pass
-            except Exception as e:
-                self.log.warning(f"SentenceTransformer init failed: {e}")
-                self.model = None
+                except Exception as e:
+                    self._model_failed = True
+                    self._warn_disabled(f"could not load embedding model '{self._model_name}' ({e})")
+                    self.model = None
         if self.dimension is None:
             # fall back to ST default miniLM size
             self.dimension = 384
         if self._backend == "pinecone":
             self._ensure_pinecone_ready()
+            if self.index is None:
+                self._warn_disabled("Pinecone backend selected but no index is available (check PINECONE_API_KEY)")
         elif self._backend == "chroma":
             self._ensure_chroma_ready()
+            if self._chroma_collection_handle is None:
+                self._warn_disabled(f"Chroma store at '{self._chroma_path}' could not be opened")
         else:
-            if not hasattr(self, "_backend_warned"):
-                self.log.warning(f"Unknown memory backend '{self._backend}'. Falling back to no-op store.")
-                self._backend_warned = True
+            self._warn_disabled(f"unknown MEMORY_BACKEND '{self._backend}' (use chroma, pinecone or none)")
 
     def _ensure_pinecone_ready(self):
         if self.index is None and self._api_key and self._index_name:

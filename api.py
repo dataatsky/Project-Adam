@@ -13,15 +13,16 @@ def create_app(get_brain):
         try:
             recent_memories = getattr(brain, "recent_memories", []) or []
             recent_impulses = getattr(brain, "last_impulses", []) or []
+            status = brain.agent_status
             state = {
                 "cycle": getattr(brain, "cycle_counter", 0),
                 "location": brain.current_world_state.get("agent_location", "unknown") if getattr(brain, "current_world_state", None) else "unknown",
-                "mood": brain.agent_status['emotional_state']['mood'],
-                "hunger": brain.agent_status['needs']['hunger'],
+                "mood": status['emotional_state']['mood'],
+                "hunger": status['needs']['hunger'],
                 "recent_impulses": recent_impulses[:3],
                 "recent_memories": recent_memories[-3:],
                 "recent_diaries": [entry.get("text") for entry in getattr(brain, "diary_entries", [])[-3:]],
-                "current_goal": getattr(brain, "active_goal", {}).get("name") if hasattr(brain, "active_goal") else None,
+                "current_goal": status.get("goal"),
                 "kpis": brain.insight.compute_kpis() if getattr(brain, "insight", None) else {},
                 "relationships": brain.current_world_state.get("relationships", {}) if getattr(brain, "current_world_state", None) else {},
             }
@@ -39,7 +40,7 @@ def _safe_brain_state(brain):
             "mood": brain.agent_status['emotional_state']['mood'],
             "hunger": brain.agent_status['needs']['hunger'],
             "kpis": brain.insight.compute_kpis() if getattr(brain, "insight", None) else {},
-            "current_goal": getattr(brain, "active_goal", {}).get("name") if hasattr(brain, "active_goal") else None,
+            "current_goal": brain.agent_status.get("goal"),
             "relationships": brain.current_world_state.get("relationships", {}) if getattr(brain, "current_world_state", None) else {},
         }
         return state

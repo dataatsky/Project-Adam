@@ -69,7 +69,7 @@ class InsightEngine:
         return round(min(1.0, best / max(1, n / 2)), 2)
 
     def _goal_progress(self, last_action):
-        helpful = {"investigate", "answer", "go", "turn_on", "open"}
+        helpful = {"examine", "go", "toggle", "open", "unlock", "take", "repair", "help"}
         detour = {"sleep", "read", "eat"}
         v = (last_action or {}).get("verb")
         t = (last_action or {}).get("target")

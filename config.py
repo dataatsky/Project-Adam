@@ -8,6 +8,10 @@ load_dotenv(".env")
 
 # LLM / Psyche service
 PSYCHE_LLM_API_URL = os.getenv("PSYCHE_LLM_API_URL", "http://127.0.0.1:5001/")
+PSYCHE_PORT = int(os.getenv("PSYCHE_PORT", "5001"))
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3").strip().strip('"')
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_RETRIES = int(os.getenv("OLLAMA_RETRIES", "2"))
 
 # Pinecone / embeddings
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE")
@@ -15,9 +19,9 @@ PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD")
 PINECONE_REGION = os.getenv("PINECONE_REGION")
-SENTENCE_MODEL = os.getenv("SENTENCE_MODEL")
+SENTENCE_MODEL = os.getenv("SENTENCE_MODEL", "all-MiniLM-L6-v2")
 
-# Local vector store (Chroma)
+# Long-term memory backend: "chroma" (local, default), "pinecone", or "none"
 MEMORY_BACKEND = (os.getenv("MEMORY_BACKEND", "chroma") or "chroma").strip().lower()
 CHROMA_PATH = os.getenv("CHROMA_PATH", "./chroma")
 CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", PINECONE_INDEX_NAME or "adam-memory")
@@ -50,6 +54,8 @@ LOG_FILE = os.getenv("LOG_FILE", "adam_behavior_log.csv")
 # Loop pacing
 CYCLE_SLEEP = float(os.getenv("CYCLE_SLEEP", "5"))
 IMAGINE_TOP_K = int(os.getenv("IMAGINE_TOP_K", "3"))
+# Re-model a silent agent's mind at most every N cycles (always when they speak)
+TOM_INTERVAL = int(os.getenv("TOM_INTERVAL", "5"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # Security harness
@@ -97,5 +103,6 @@ if not AGENT_STATUS:
         "needs": {
             "hunger": _get_float("AGENT_HUNGER", 0.1),
         },
-        "goal": os.getenv("AGENT_GOAL", "Find the source of the strange noises in the house."),
+        # Empty = Adam proposes his own goal from his needs
+        "goal": os.getenv("AGENT_GOAL", ""),
     }
