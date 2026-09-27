@@ -1,6 +1,7 @@
 import json
 import threading
 import time
+from collections import Counter
 from typing import Optional, Callable
 import copy
 import logging
@@ -68,6 +69,11 @@ class CognitiveLoop:
         self.last_impulses: list[dict] = []
         self.diary_entries: list[dict] = []
         self.tom_cache: dict[str, dict] = {}
+        # Plumbing health, reported by benchmark.py: how often the LLM's output had to be corrected or replaced
+        self.stats: Counter = Counter()
+        self._goal_completed_by_reflection = False
+        # Base seed for LLM sampling (None = unseeded); each call uses llm_seed * 1000 + cycle
+        self.llm_seed: Optional[int] = None
 
     # ------------------------------------------------------------------
     # State (read from the world)
@@ -202,12 +208,18 @@ class CognitiveLoop:
             "resonant_memories": self.last_resonant_memories,
             "recent_diaries": [entry.get("text") for entry in self.diary_entries[-3:]],
             "mastered_skills": self.insight.get_mastered_skills() if self.insight else [],
+            "repetitions": self._repetitions(),
         }
+        if self.llm_seed is not None:
+            payload["seed"] = self.llm_seed * 1000 + self.cycle_counter
         if self.security:
             payload = self.security.before_psyche("generate_impulse", payload)
         impulses = None
         if self.psyche:
             impulses = self.psyche.generate_impulse(payload)
+            self.stats["psyche_calls"] += 1
+            if not impulses or impulses.get("psyche_fallback"):
+                self.stats["psyche_fallbacks"] += 1
         if self.security:
             impulses = impulses or {}
             self.security.after_psyche("generate_impulse", payload, impulses)
@@ -230,6 +242,7 @@ class CognitiveLoop:
         if world is None:
             return impulses
         grounded = []
+        self.stats["impulses"] += len(items)
         for imp in items:
             if not isinstance(imp, dict):
                 continue
@@ -238,6 +251,7 @@ class CognitiveLoop:
             if ok:
                 grounded.append(imp)
             else:
+                self.stats["impulses_dropped"] += 1
                 self.log.info(f"Dropped ungrounded impulse {imp.get('verb')} {imp.get('target')}: {why}")
         return {**impulses, "impulses": grounded or [{**WAIT_ACTION, "drive": "safety", "urgency": 0.1}]}
 
@@ -300,12 +314,18 @@ class CognitiveLoop:
             "world_state": self.current_world_state,
             "hypothetical_outcomes": hypothetical,
             "recent_memories": self.recent_memories + tom_insights,
+            "repetitions": self._repetitions(),
         }
+        if self.llm_seed is not None:
+            payload["seed"] = self.llm_seed * 1000 + self.cycle_counter
         reflection = {"final_action": dict(WAIT_ACTION), "reasoning": "Mind is blank."}
         if self.psyche:
             if self.security:
                 payload = self.security.before_psyche("reflect", payload)
-            reflection = self.psyche.reflect(payload) or reflection
+            reflection = self.psyche.reflect(payload) or {**reflection, "psyche_fallback": True}
+            self.stats["psyche_calls"] += 1
+            if reflection.get("psyche_fallback"):
+                self.stats["psyche_fallbacks"] += 1
             self.log.debug(f"Reflection: {reflection.get('reasoning')}")
             if reflection.get("thoughts_on_others") and tom_insights:
                 self.log.info(f"Theory of Mind: {reflection.get('thoughts_on_others')}")
@@ -324,6 +344,7 @@ class CognitiveLoop:
         status = reflection.get("goal_status")
         if agent["active_goal"] and status in {"completed", "abandoned"}:
             self.log.info(f"Goal '{agent['active_goal']['name']}' {status}.")
+            self._goal_completed_by_reflection = status == "completed"
             world.clear_goal(self.agent_id, status=status)
         new_goal = reflection.get("new_goal")
         if new_goal and not agent["active_goal"]:
@@ -337,9 +358,14 @@ class CognitiveLoop:
         final["verb"] = normalize_verb(final.get("verb"))
         reasoning = reflection.get("reasoning") or "I am unsure."
         ok, why = world.validate_action(final, self.agent_id)
+        self.stats["decisions"] += 1
         if ok:
             return final, reasoning
+        self.stats["decisions_rejected"] += 1
         self.log.info(f"Rejected ungrounded decision {final.get('verb')} {final.get('target')}: {why}")
+        target = final.get("target")
+        wanted = final.get("verb") if target in NULL_TARGETS else f"{final.get('verb')} the {target}"
+        self._remember(f"I decided to {wanted}. But it failed because it was impossible: {why}")
         ranked = sorted(impulses.get("impulses", []), key=lambda x: x.get("urgency", 0), reverse=True)
         fallback = next((imp for imp in ranked if world.validate_action(imp, self.agent_id)[0]), WAIT_ACTION)
         action = {k: fallback.get(k) for k in ("verb", "target", "instrument") if fallback.get(k) is not None}
@@ -368,9 +394,7 @@ class CognitiveLoop:
             f"I was in the {loc_name}. {sensed_str} My emotional state became {self.current_mood}. "
             f"{decision_str}. {'The result was: ' if result.get('success') else 'But it failed because '}" + reason
         )
-        self.recent_memories.append(event_desc)
-        if len(self.recent_memories) > 5:
-            self.recent_memories.pop(0)
+        self._remember(event_desc)
         # Store vector memory
         try:
             if self.memory:
@@ -389,7 +413,7 @@ class CognitiveLoop:
                         self.log.info(f"Consolidated Insight: {insight}")
                         if self.memory:
                             self.memory.upsert_texts([f"INSIGHT: {insight}"])
-                        self.recent_memories.append(f"Upon waking, I realized: {insight}")
+                        self._remember(f"Upon waking, I realized: {insight}")
             except Exception as e:
                 self.log.error(f"Consolidation failed: {e}")
 
@@ -397,7 +421,12 @@ class CognitiveLoop:
         triggers = [f"{e.get('object')} : {e.get('details')}" for e in world_state.get('sensory_events', []) if 'object' in e]
         imps = impulses.get('impulses', []) if impulses else []
         emotional_delta = (impulses or {}).get('emotional_shift', {})
-        self.insight.add_cycle(action=action, success=bool(result.get('success')), impulses=imps, triggers=triggers, mood=self.current_mood)
+        goal_advanced = bool(result.get("goal_advanced")) or self._goal_completed_by_reflection
+        self._goal_completed_by_reflection = False
+        self.insight.add_cycle(
+            action=action, success=bool(result.get('success')), impulses=imps, triggers=triggers, mood=self.current_mood,
+            goal_active=bool(world_state.get("goal")), goal_advanced=goal_advanced,
+        )
         kpis = self.insight.compute_kpis()
         imagined_texts = []
         for hypo in self.last_hypothetical or []:
@@ -544,9 +573,7 @@ class CognitiveLoop:
         self.diary_entries.append(entry)
         if len(self.diary_entries) > 10:
             self.diary_entries.pop(0)
-        self.recent_memories.append(f"Diary entry: {diary_text}")
-        if len(self.recent_memories) > 5:
-            self.recent_memories.pop(0)
+        self._remember(f"Diary entry: {diary_text}")
         try:
             if self.memory:
                 self.memory.upsert_texts([diary_text])
@@ -562,6 +589,20 @@ class CognitiveLoop:
                 self.world.apply_emotional_shift(self.agent_id, None, -0.02)
 
     # ------------------------------------------------------------------
+    def _remember(self, text: str, keep: int = 5):
+        """Add to short-term memory (what the next reflection sees)."""
+        self.recent_memories.append(text)
+        del self.recent_memories[:-keep]
+
+    def _repetitions(self, window: int = 8, threshold: int = 3) -> list[str]:
+        """Actions Adam keeps repeating, e.g. "examine radio (5 of the last 8 cycles)"."""
+        actions = list(getattr(self.insight, "actions", []))[-window:]
+        counts = Counter(
+            " ".join(p for p in (a.get("verb"), a.get("target")) if p not in NULL_TARGETS)
+            for a in actions
+        )
+        return [f"{act} ({n} of the last {len(actions)} cycles)" for act, n in counts.most_common() if n >= threshold]
+
     def _dampen_repeated_impulses(self, impulses: dict) -> dict:
         items = impulses.get('impulses') or []
         if not items:

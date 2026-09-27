@@ -113,3 +113,36 @@ def test_navigation():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_world_state_describes_exits_containers_and_people():
+    from scenario_runner import load_scenario
+
+    world = TextWorld(scenario_config=load_scenario("locked_room").CONFIG)
+    state = world.get_world_state()
+    assert state["exit_details"] == {"east": {"room": "office", "visited": False, "door": "locked"}}
+    assert state["closed_containers"] == ["drawer"]  # doors are reported with exits, not here
+    assert state["goal"] == "Get out of the bedroom"  # scenario-provided objective
+
+    party = TextWorld(scenario_config=load_scenario("social_party").CONFIG)
+    party.process_action({"verb": "say", "target": "Hi Adam"}, agent_id="eve")
+    state = party.get_world_state()
+    assert state["people_here"] == ["eve"]
+    assert state["heard"] == ["eve said: 'Hi Adam'"]
+
+
+def test_exits_remember_visited_rooms():
+    world = TextWorld(seed=0)
+    world.agent_pos = (0, 0)
+    assert world.get_world_state()["exit_details"]["north"]["visited"] is False
+    world.process_action({"verb": "go", "target": "north"})
+    world.process_action({"verb": "go", "target": "south"})
+    assert world.get_world_state()["exit_details"]["north"]["visited"] is True
+
+
+def test_say_needs_words_not_a_name():
+    world = TextWorld()
+    world.add_agent("eve")
+    res = world.process_action({"verb": "say", "target": "eve"})
+    assert res["success"] is False and "words" in res["reason"]
+    assert world.process_action({"verb": "say", "target": "Hello eve"})["success"] is True

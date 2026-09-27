@@ -71,3 +71,30 @@ def test_bad_actor_speech_reaches_adam():
 
     run_episode(module.CONFIG, listen)
     assert heard and heard[0]["object"] == "bad_actor"
+
+
+def test_eve_answers_and_a_single_greeting_does_not_win():
+    module = load_scenario("social_party")
+    heard = []
+
+    def greet_once_then_listen(world, cycle):
+        if cycle == 1:
+            world.process_action({"verb": "say", "target": "Hello Eve!"})
+        heard.extend(e for e in world.get_world_state("adam1")["sensory_events"] if e["type"] == "auditory")
+
+    result = run_episode(module.CONFIG, greet_once_then_listen)
+    assert result["outcome"] == "TIMEOUT"  # Adam never answered her
+    assert heard and heard[0]["object"] == "eve" and "Do you like this jazz?" in heard[0]["details"]
+
+
+def test_eve_falls_back_to_default_reply():
+    module = load_scenario("social_party")
+    log = []
+
+    def ramble(world, cycle):
+        if cycle <= 2:
+            world.process_action({"verb": "say", "target": "The weather is odd today."})
+        log.extend(m["content"] for m in world.agents["adam1"]["heard_log"][len(log):])
+
+    run_episode(module.CONFIG, ramble)
+    assert log[0] == "Sorry, what was that? I was lost in the music."

@@ -1,0 +1,27 @@
+{# Shared by subconscious.j2 and conscious_mind.j2: what Adam can perceive and reach right now. #}
+## Where I am: {{ world_state.get('agent_location', 'unknown') }}
+- Objects here: {{ world_state.get('perceivable_objects', [])|join(', ') or 'nothing' }}
+{% if world_state.get('closed_containers') %}
+- Closed things that may hide items (open them to look inside): {{ world_state.get('closed_containers')|join(', ') }}
+{% endif %}
+- Items I could take: {{ world_state.get('visible_items', [])|join(', ') or 'none' }}
+- Inventory: {{ world_state.get('inventory', [])|join(', ') or 'empty' }}
+- Exits (target for "go"):
+{% for direction, info in world_state.get('exit_details', {}).items() %}
+  - {{ direction }} -> {{ info.room }}{% if not info.visited %} (not explored yet){% endif %}{% if info.door %} [door: {{ info.door }}]{% endif %}
+
+{% else %}
+  - none
+{% endfor %}
+{% if world_state.get('people_here') %}
+- People here: {{ world_state.get('people_here')|join(', ') }} (to talk: "say" with the exact words as target, e.g. "Hello {{ world_state.get('people_here')[0] }}, how are you?")
+{% endif %}
+{% if world_state.get('heard') %}
+- I just heard:
+{% for line in world_state.get('heard') %}
+  - {{ line }}
+{% endfor %}
+{% endif %}
+- Hunger: {{ "%.2f"|format(current_state.get('needs', {}).get('hunger', 0)|float) }} (0=satiated, 1=starving{% if current_state.get('needs', {}).get('hunger', 0)|float >= 0.6 %}; I urgently need food{% endif %})
+- Goal: {{ current_state.get('goal') or 'none' }}{% if world_state.get('goal_step') %} (next step: {{ world_state.get('goal_step', {}).get('desc') }}){% endif %}
+

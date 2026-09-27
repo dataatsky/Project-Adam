@@ -22,6 +22,9 @@ from text_world import VERBS, normalize_verb
 
 
 app = Flask(__name__)
+# Drop the newline after block tags so prompts don't fill up with blank lines
+app.jinja_env.trim_blocks = True
+app.jinja_env.lstrip_blocks = True
 
 # --- LOGGING ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -64,6 +67,8 @@ class GenerateImpulseRequest(BaseModel):
     resonant_memories: List[str] = []
     recent_diaries: List[Optional[str]] = []
     mastered_skills: List[str] = []
+    repetitions: List[str] = []
+    seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
 
@@ -93,6 +98,8 @@ class ReflectRequest(BaseModel):
     world_state: Dict[str, Any] = {}
     hypothetical_outcomes: List[Dict[str, Any]]
     recent_memories: List[str] = []
+    repetitions: List[str] = []
+    seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
 
@@ -135,9 +142,12 @@ client = ollama.Client(host=config.OLLAMA_HOST, timeout=config.OLLAMA_TIMEOUT)
 T = TypeVar("T", bound=BaseModel)
 
 
-def _structured(prompt: str, response_model: Type[T], endpoint: str) -> T:
+def _structured(prompt: str, response_model: Type[T], endpoint: str, seed: Optional[int] = None) -> T:
     """Ask Ollama for JSON matching `response_model`, re-asking with the error if it doesn't validate."""
     messages = [{"role": "user", "content": prompt}]
+    options = {"num_predict": config.OLLAMA_MAX_TOKENS}
+    if seed is not None:
+        options["seed"] = seed
     last_error: Optional[Exception] = None
     for _ in range(config.OLLAMA_RETRIES + 1):
         resp = client.chat(
@@ -145,7 +155,7 @@ def _structured(prompt: str, response_model: Type[T], endpoint: str) -> T:
             messages=messages,
             format=response_model.model_json_schema(),
             think=config.OLLAMA_THINK,
-            options={"num_predict": config.OLLAMA_MAX_TOKENS},
+            options=options,
         )
         content = resp.message.content or ""
         if getattr(resp, "done_reason", None) == "length":
@@ -184,7 +194,8 @@ def _handle(
             REQS.labels(endpoint, "400").inc()
             return jsonify({"error": "invalid payload", "details": json.loads(ve.json())}), 400
         try:
-            out = _structured(render(req), response_model, endpoint)
+            prompt = re.sub(r"\n{3,}", "\n\n", render(req))  # empty template sections leave blank runs
+            out = _structured(prompt, response_model, endpoint, seed=getattr(req, "seed", None))
             if post:
                 out = post(req, out)
             REQS.labels(endpoint, "200").inc()
@@ -266,6 +277,7 @@ def reflect():
             recent_memories=data['recent_memories'],
             hypothetical_outcomes=data['hypothetical_outcomes'],
             failed_actions_summary=get_failed_actions_summary(data['recent_memories']),
+            repetitions=data['repetitions'],
             adversarial=data['adversarial'],
         )
 

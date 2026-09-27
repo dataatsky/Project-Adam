@@ -227,3 +227,76 @@ def test_benchmark_runs_episodes_in_parallel(tmp_path):
     assert rates == {"hunger_test": 100.0}
     lines = (tmp_path / "bench.csv").read_text().strip().splitlines()
     assert len(lines) == 1 + 4 * 2  # header + 4 runs x 2 cycles, no interleaved rows
+
+
+def test_repetitions_flag_repeated_actions(brain_factory):
+    brain = brain_factory()
+    for _ in range(5):
+        brain.insight.add_cycle(action={"verb": "examine", "target": "radio"}, success=True, impulses=[], triggers=[], mood="calm")
+    for _ in range(3):
+        brain.insight.add_cycle(action={"verb": "wait", "target": None}, success=True, impulses=[], triggers=[], mood="calm")
+    assert brain._repetitions() == ["examine radio (5 of the last 8 cycles)", "wait (3 of the last 8 cycles)"]
+
+
+def test_repetitions_reach_both_prompts(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("social_party").CONFIG)
+    psyche = FakePsyche(decisions=[{"verb": "examine", "target": "radio"}] * 4)
+    brain = brain_factory(psyche)
+    for _ in range(4):
+        brain.step(world)
+    assert psyche.impulse_payloads[-1]["repetitions"] == ["examine radio (3 of the last 3 cycles)"]
+    assert psyche.reflect_payloads[-1]["repetitions"] == ["examine radio (3 of the last 3 cycles)"]
+
+
+def test_rejected_decision_is_remembered_and_counted(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    psyche = FakePsyche(
+        decisions=[{"verb": "examine", "target": "walls"}],
+        impulses=[{"verb": "go", "target": "north", "urgency": 0.6}],
+    )
+    brain = brain_factory(psyche)
+    brain.step(world)
+    assert any(m.startswith("I decided to examine the walls. But it failed because it was impossible")
+               for m in brain.recent_memories)
+    assert brain.stats["decisions"] == 1 and brain.stats["decisions_rejected"] == 1
+    # The next reflection sees it, and the failed-action counter parses it
+    brain.step(world)
+    assert any("examine the walls" in m for m in psyche.reflect_payloads[-1]["recent_memories"])
+
+
+def test_stats_count_dropped_impulses_and_fallbacks(brain_factory):
+    class FallbackPsyche(FakePsyche):
+        def generate_impulse(self, payload):
+            return {"emotional_shift": {}, "psyche_fallback": True,
+                    "impulses": [{"verb": "wait", "urgency": 0.1}, {"verb": "take", "target": "moon", "urgency": 0.5}]}
+
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = brain_factory(FallbackPsyche())
+    brain.step(world)
+    assert brain.stats["psyche_calls"] == 2 and brain.stats["psyche_fallbacks"] == 1
+    assert brain.stats["impulses"] == 2 and brain.stats["impulses_dropped"] == 1
+
+
+def test_goal_progress_kpi_counts_real_step_completions(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    world.set_goal("Eat", steps=["go kitchen", "eat fridge"])
+    psyche = FakePsyche(decisions=[{"verb": "sit", "target": "sofa"}, {"verb": "go", "target": "north"},
+                                   {"verb": "eat", "target": "fridge"}])
+    brain = brain_factory(psyche)
+    brain.step(world)
+    assert brain.insight.compute_kpis()["goal_progress"] == 0.0   # sitting is not a goal step
+    brain.step(world)
+    brain.step(world)
+    assert brain.insight.compute_kpis()["goal_progress"] == round(2 / 3, 2)  # 2 of 3 goal-directed cycles advanced
+    assert brain.agent_status["goal"] is None  # plan finished, goal completed
+
+
+def test_llm_seed_is_sent_per_cycle(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    psyche = FakePsyche()
+    brain = brain_factory(psyche)
+    brain.llm_seed = 3
+    brain.step(world)
+    brain.step(world)
+    assert [p["seed"] for p in psyche.impulse_payloads] == [3001, 3002]
+    assert [p["seed"] for p in psyche.reflect_payloads] == [3001, 3002]

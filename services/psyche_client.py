@@ -75,7 +75,7 @@ class PsycheClient:
                     time.sleep(delay)
                     delay *= 2
                 else:
-                    return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank."}
+                    return {"final_action": {"verb": "wait", "target": "null"}, "reasoning": "Mind is blank.", "psyche_fallback": True}
 
     def consolidate(self, recent_memories: list[str]) -> str:
         url = f"{self.base_url}/consolidate"

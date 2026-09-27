@@ -30,7 +30,7 @@ VERBS: Dict[str, str] = {
     "repair": "repair something (needs a toolkit)",
     "unlock": "unlock a locked door (needs its key in inventory)",
     "help": "help someone who asked (target: neighbor)",
-    "say": "speak aloud (target: the message itself)",
+    "say": "speak aloud to whoever is here (target: the exact words, e.g. \"Hello, who are you?\")",
     "break": "destroy an object",
     "inventory": "check what I am carrying (target: null)",
 }
@@ -167,6 +167,8 @@ class TextWorld:
         self.neighbor_state = {"awaiting_help": False, "last_visit": None}
         self.relationships = {"neighbor": {"trust": 0.5, "last_request": None}}
         self.scenario_name: Optional[str] = None
+        # Global order of spoken messages, so conversations can be checked turn by turn
+        self.message_seq = 0
 
         # Initialize Grid
         self.map = GridMap()
@@ -180,12 +182,20 @@ class TextWorld:
             self.add_agent("adam1")
 
     def add_agent(self, agent_id: str, **kwargs):
-        """Register a new agent in the world. Existing agents are left untouched."""
+        """Register a new agent in the world. Existing agents are left untouched.
+
+        Optional kwargs: pos, inventory, hunger, mood, mood_intensity, script,
+        control_type ("autonomous", "scripted" or "reactive"), goal (a name, or
+        {"name": ..., "steps": [...]}), and for reactive agents: responses
+        ([{"keywords": [...], "say": "...", "once": bool}]) and default_response.
+        """
         if agent_id in self.agents:
             return
+        pos = tuple(kwargs.get("pos", (0, 0)))  # Living Room
         self.agents[agent_id] = {
             "id": agent_id,
-            "pos": tuple(kwargs.get("pos", (0, 0))),  # Living Room
+            "pos": pos,
+            "visited": {pos},
             "inventory": list(kwargs.get("inventory", [])),
             "hunger": float(kwargs.get("hunger", 0.25)),
             "mood": kwargs.get("mood", "neutral"),
@@ -196,9 +206,17 @@ class TextWorld:
             "goal_history": [],
             "recent_examined": {},
             "inbox": [],
+            "heard_log": [],  # every message this agent heard, kept after the inbox is read
             "script": list(kwargs.get("script", [])),
             "control_type": kwargs.get("control_type", "autonomous"),
+            "responses": [dict(r) for r in kwargs.get("responses", [])],
+            "default_response": kwargs.get("default_response"),
         }
+        goal = kwargs.get("goal")
+        if isinstance(goal, dict):
+            self.set_goal(goal["name"], steps=goal.get("steps"), agent_id=agent_id)
+        elif goal:
+            self.set_goal(goal, agent_id=agent_id)
 
     @property
     def agent_pos(self) -> Tuple[int, int]:
@@ -208,6 +226,7 @@ class TextWorld:
     @agent_pos.setter
     def agent_pos(self, value):
         self.agents["adam1"]["pos"] = tuple(value)
+        self.agents["adam1"]["visited"].add(tuple(value))
 
     @property
     def agent_inventory(self) -> List[str]:
@@ -519,6 +538,17 @@ class TextWorld:
             if verb == "say":
                 events.append(f"{agent_id} says: '{target}'")
 
+        # Reactive agents answer the latest thing said to them since the last tick
+        for agent_id, agent_data in self.agents.items():
+            if agent_data.get("control_type") != "reactive" or not agent_data["inbox"]:
+                continue
+            heard = agent_data["inbox"][-1]["content"]
+            agent_data["inbox"].clear()
+            reply = self._reactive_reply(agent_data, heard)
+            if reply:
+                self.process_action({"verb": "say", "target": reply}, agent_id=agent_id)
+                events.append(f"{agent_id} says: '{reply}'")
+
         # restock fridge occasionally
         kitchen_loc = self.map.get_location(*self.room_coords.get("kitchen", (0, 1)))
         if kitchen_loc:
@@ -528,6 +558,19 @@ class TextWorld:
                 fridge["contains"]["food"] = fridge["contains"].get("food", 0) + 1
 
         return events
+
+    @staticmethod
+    def _reactive_reply(agent: Dict, heard: str) -> Optional[str]:
+        """First matching keyword rule wins; rules marked `once` fire only one time."""
+        text = heard.lower()
+        for rule in agent.get("responses", []):
+            if rule.get("used"):
+                continue
+            if any(k in text for k in rule.get("keywords", [])):
+                if rule.get("once"):
+                    rule["used"] = True
+                return rule["say"]
+        return agent.get("default_response")
 
     def _trigger_random_event(self, events: List[str]):
         """Select and apply a stochastic micro-event (power flicker, draft, etc.)."""
@@ -631,6 +674,8 @@ class TextWorld:
         reach = self.available_targets(agent_id)
         if instrument not in NULL_TARGETS and instrument not in reach["inventory"]:
             return False, f"I don't have a {instrument}."
+        if verb == "say" and target and target in reach["agents"] + ["neighbor"]:
+            return False, f"To speak, the target must be the words I say, not a name like '{target}'."
         if verb in {"wait", "inventory", "say"}:
             return True, ""
         if verb == "go":
@@ -704,11 +749,25 @@ class TextWorld:
 
         exits = self.map.get_exits(*agent["pos"])
         exit_doors = {}
+        exit_details = {}
         for direction in exits:
             dx, dy = self.map.offsets[direction]
-            door = self.map.door_between(agent["pos"], (agent["pos"][0] + dx, agent["pos"][1] + dy))
+            dest = (agent["pos"][0] + dx, agent["pos"][1] + dy)
+            door = self.map.door_between(agent["pos"], dest)
             if door:
                 exit_doors[direction] = door.get("state")
+            exit_details[direction] = {
+                "room": self.map.get_location(*dest).name,
+                "visited": dest in agent["visited"],
+                "door": door.get("state") if door else None,
+            }
+        closed_containers = [
+            name for name, obj in room_objects.items()
+            if isinstance(obj, dict) and "openable" in obj.get("properties", [])
+            and "lockable" not in obj.get("properties", []) and obj.get("state") != "open"
+        ]
+        people_here = [o for o, d in self.agents.items() if o != agent_id and d["pos"] == agent["pos"]]
+        heard = [f"{e['object']} {e['details']}" for e in sensory_events if e.get("type") == "auditory"]
         goal = agent["active_goal"]
 
         return {
@@ -724,6 +783,10 @@ class TextWorld:
             "visible_items": list(self._visible_items(room_objects).keys()),
             "available_exits": exits,
             "exit_doors": exit_doors,
+            "exit_details": exit_details,
+            "closed_containers": closed_containers,
+            "people_here": people_here,
+            "heard": heard,
             "inventory": list(agent["inventory"]),
             "goal": goal["name"] if goal else None,
             "goal_steps": [s.get("desc") for s in goal["steps"]] if goal else [],
@@ -760,13 +823,17 @@ class TextWorld:
         if verb == "say":
             # Broadcast to others in room
             message = target or "..."
+            self.message_seq += 1
             for other_id, other_data in self.agents.items():
                 if other_id != agent_id and other_data["pos"] == agent["pos"]:
-                    other_data["inbox"].append({
+                    msg = {
                         "sender": agent_id,
                         "content": message,
-                        "timestamp": self.world_time
-                    })
+                        "timestamp": self.world_time,
+                        "seq": self.message_seq,
+                    }
+                    other_data["inbox"].append(msg)
+                    other_data["heard_log"].append(dict(msg))
             return {"success": True, "reason": f"I said: '{message}'"}
 
         if verb == "go":
@@ -779,7 +846,8 @@ class TextWorld:
             state = obj.get("state") if isinstance(obj, dict) else None
             handler = getattr(self, f"_act_{verb}")
             result = handler(target, obj, props, state, instrument=instrument, agent=agent)
-        self._update_goal_progress(verb, target, result.get("success", False), agent_id)
+        if self._update_goal_progress(verb, target, result.get("success", False), agent_id):
+            result["goal_advanced"] = True
         return result
 
     # ------------------------------------------------------------------
@@ -796,6 +864,7 @@ class TextWorld:
 
         if new_pos:
             agent["pos"] = new_pos
+            agent["visited"].add(new_pos)
             loc = self.map.get_location(*new_pos)
             return {"success": True, "reason": f"I walked {direction} into the {loc.name if loc else 'unknown'}."}
 
@@ -1093,12 +1162,12 @@ class TextWorld:
             return bool(loc) and loc.name.lower() == want
         return False
 
-    def _update_goal_progress(self, verb: str, target: Optional[str], success: bool, agent_id: str):
-        """Advance goal pointer when the expected verb/target succeeds."""
+    def _update_goal_progress(self, verb: str, target: Optional[str], success: bool, agent_id: str) -> bool:
+        """Advance goal pointer when the expected verb/target succeeds. Returns True if a step was completed."""
         step = self._current_goal_step(agent_id)
 
         if not step or not success:
-            return
+            return False
 
         agent = self.agents[agent_id]
         if self._step_matches(step, verb, target, agent):
@@ -1112,3 +1181,5 @@ class TextWorld:
                     self.neighbor_state["awaiting_help"] = False
                     self.neighbor_state["request_cycle"] = None
                 self.clear_goal(agent_id, status="completed")
+            return True
+        return False
