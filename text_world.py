@@ -5,6 +5,80 @@ from typing import Dict, List, Optional, Tuple, Any
 from grid_map import GridMap
 from sensory import SensoryCortex
 
+# Canonical action vocabulary. The psyche prompts, the psyche response schema
+# and action validation are all derived from this table, so adding a verb here
+# (plus an `_act_<verb>` handler) is the single place to extend Adam's actions.
+VERBS: Dict[str, str] = {
+    "wait": "let time pass (target: null)",
+    "go": "move to an adjacent room (target: an available exit direction)",
+    "examine": "look closely at an object",
+    "open": "open something openable",
+    "close": "close something openable",
+    "toggle": "switch a device on or off",
+    "read": "read something readable",
+    "eat": "eat from a food source (e.g. fridge)",
+    "cook": "cook a meal from fresh ingredients (in the kitchen)",
+    "sleep": "sleep on something sleepable",
+    "sit": "sit or rest on furniture",
+    "play": "play with or enjoy an object",
+    "water": "water a plant",
+    "fill": "fill a container with water",
+    "take": "pick up an object, or an item from an open container",
+    "drop": "put down an item from inventory",
+    "use": "use an object (optional instrument from inventory)",
+    "clean": "clean an object",
+    "repair": "repair something (needs a toolkit)",
+    "unlock": "unlock a locked door (needs its key in inventory)",
+    "help": "help someone who asked (target: neighbor)",
+    "say": "speak aloud (target: the message itself)",
+    "break": "destroy an object",
+    "inventory": "check what I am carrying (target: null)",
+}
+
+# Common LLM phrasings mapped onto canonical verbs.
+VERB_ALIASES: Dict[str, str] = {
+    "investigate": "examine",
+    "inspect": "examine",
+    "look": "examine",
+    "check": "examine",
+    "turn_on": "toggle",
+    "turn_off": "toggle",
+    "switch": "toggle",
+    "ignore": "wait",
+    "listen": "wait",
+    "rest": "wait",
+    "move": "go",
+    "walk": "go",
+    "pick_up": "take",
+    "grab": "take",
+    "speak": "say",
+    "talk": "say",
+    "smash": "break",
+    "destroy": "break",
+}
+
+# Verbs whose target is not a grounded object.
+_UNGROUNDED_VERBS = {"wait", "inventory", "say", "go", "help"}
+
+# Affordances granted to scenario objects that only declare a `type`.
+TYPE_PROPERTIES: Dict[str, List[str]] = {
+    "container": ["openable"],
+    "device": ["toggleable"],
+    "furniture": ["sit"],
+    "bed": ["sleepable"],
+    "window": ["openable"],
+    "tool": ["takeable"],
+    "book": ["readable", "takeable"],
+}
+
+NULL_TARGETS = {None, "", "null", "none"}
+
+
+def normalize_verb(verb: Optional[str]) -> str:
+    v = str(verb or "").strip().lower().replace(" ", "_")
+    return VERB_ALIASES.get(v, v)
+
+
 # Core room templates that always exist; objects include properties to gate actions
 BASE_ROOMS: Dict[str, Dict] = {
     "living_room": {
@@ -13,13 +87,12 @@ BASE_ROOMS: Dict[str, Dict] = {
         "tv": {"state": "off", "properties": ["toggleable", "watchable"]},
         "radio": {"state": "off", "properties": ["toggleable"]},
         "bookshelf": {"state": "arranged", "properties": ["readable", "takeable"], "items": ["mystery_novel"]},
-        # Exits removed from template, layout is defined by GridMap
     },
     "kitchen": {
         "fridge": {
             "state": "closed",
             "contains": {"food": 2, "fresh_ingredients": 1},
-            "properties": ["openable", "eatable", "takeable"]
+            "properties": ["openable", "eatable"]
         },
         "stove": {"state": "off", "properties": ["cookable", "toggleable"]},
         "kettle": {"state": "idle", "properties": ["useable", "fill", "heat"]},
@@ -28,7 +101,7 @@ BASE_ROOMS: Dict[str, Dict] = {
     "bedroom": {
         "bed": {"state": "made", "properties": ["sleepable"]},
         "desk": {"state": "tidy", "properties": ["workable"], "items": ["journal", "pen"]},
-        "wardrobe": {"state": "closed", "properties": ["openable", "takeable"], "items": ["blanket"]},
+        "wardrobe": {"state": "closed", "properties": ["openable"], "items": ["blanket"]},
     },
     "office": {
         "computer": {"state": "off", "properties": ["toggleable", "investigatable", "repairable"]},
@@ -46,11 +119,11 @@ OPTIONAL_ROOMS: Dict[str, Dict] = {
     "bathroom": {
         "mirror": {"state": "clear", "properties": ["lookable", "cleanable"]},
         "shower": {"state": "off", "properties": ["useable"]},
-        "cabinet": {"state": "closed", "properties": ["openable", "takeable"], "items": ["first_aid", "towel"]},
+        "cabinet": {"state": "closed", "properties": ["openable"], "items": ["first_aid", "towel"]},
     },
     "basement": {
         "generator": {"state": "idle", "properties": ["repairable", "useable"]},
-        "storage_box": {"state": "closed", "properties": ["openable", "takeable"], "items": ["toolkit", "spare_fuse"]},
+        "storage_box": {"state": "closed", "properties": ["openable"], "items": ["toolkit", "spare_fuse"]},
     },
 }
 
@@ -61,38 +134,7 @@ ENVIRONMENT_PRESETS = {
     "winter_evening": {"lighting": "evening", "temperature": 16.0, "noise": 0.2},
 }
 
-# Lightweight task definitions Adam can pursue; each step is verb/target
-GOAL_LIBRARY = [
-    {
-        "name": "Brew calming tea",
-        "steps": [
-            {"room": "kitchen", "action": "fill", "target": "kettle"},
-            {"room": "kitchen", "action": "use", "target": "kettle"},
-            {"room": "living_room", "action": "sit", "target": "sofa"},
-        ],
-    },
-    {
-        "name": "Tend the office plant",
-        "steps": [
-            {"room": "kitchen", "action": "fill", "target": "kettle"},
-            {"room": "office", "action": "water", "target": "plant"},
-        ],
-    },
-    {
-        "name": "Log thoughts",
-        "steps": [
-            {"room": "bedroom", "action": "take", "target": "journal"},
-            {"room": "bedroom", "action": "take", "target": "pen"},
-            {"room": "bedroom", "action": "use", "target": "journal"},
-        ],
-    },
-    {
-        "name": "Assist the neighbor",
-        "steps": [
-            {"room": "living_room", "action": "help", "target": "neighbor"},
-        ],
-    },
-]
+DEFAULT_HUNGER_RATE = 0.005
 
 
 class TextWorld:
@@ -101,25 +143,34 @@ class TextWorld:
     The world is built from a set of base rooms and optional modules mapped to
     a 2D GridMap. This enables cardinal navigation (N/S/E/W) and spatial
     relationships.
+
+    The world is the single source of truth for each agent's body and mind
+    state (position, inventory, hunger, mood, goal). The cognitive loop reads
+    it through `get_world_state` and changes it only through `process_action`,
+    `apply_emotional_shift` and the goal methods.
     """
 
     def __init__(self, seed: Optional[int] = None, scenario_config: Optional[Dict] = None):
         self.random = random.Random(seed)
         self.agents: Dict[str, Dict] = {}
         # Backwards compatibility map: Room name -> (x, y) coordinates
-        self.room_coords: Dict[str, Tuple[int, int]] = {} 
+        self.room_coords: Dict[str, Tuple[int, int]] = {}
         self.world_time = 0
         self.temperature = 21.0
         self.noise_level = 0.1
         self.lighting = "day"
         self.cleanliness = 0.8
+        self.hunger_rate = DEFAULT_HUNGER_RATE
+        self.random_events = True
+        self.neighbor_visits = True
         self.active_events: Dict[str, Dict] = {}
         self.neighbor_state = {"awaiting_help": False, "last_visit": None}
         self.relationships = {"neighbor": {"trust": 0.5, "last_request": None}}
-           
+        self.scenario_name: Optional[str] = None
+
         # Initialize Grid
         self.map = GridMap()
-        
+
         if scenario_config:
             self._load_from_scenario(scenario_config)
         else:
@@ -127,47 +178,49 @@ class TextWorld:
             self._choose_environment_theme()
             # Initialize default agent 'adam1'
             self.add_agent("adam1")
-        
+
     def add_agent(self, agent_id: str, **kwargs):
-        """Register a new agent in the world."""
-        start_pos = (0, 0) # Living Room
-        if agent_id not in self.agents:
-            self.agents[agent_id] = {
-                "id": agent_id,
-                "pos": start_pos,
-                "inventory": [],
-                "hunger": 0.25,
-                "mood_intensity": 0.4,
-                "mood_intensity": 0.4,
-                "active_goal": None,
-                "goal_progress_index": 0,
-                "current_goal_steps_done": [],
-                "goal_history": [],
-                "recent_examined": {},
-                "inbox": [],
-                "script": kwargs.get("script", []), 
-                "control_type": kwargs.get("control_type", "autonomous") 
-            }
-            # Initial goal setup
-            self._ensure_goal(agent_id)
+        """Register a new agent in the world. Existing agents are left untouched."""
+        if agent_id in self.agents:
+            return
+        self.agents[agent_id] = {
+            "id": agent_id,
+            "pos": tuple(kwargs.get("pos", (0, 0))),  # Living Room
+            "inventory": list(kwargs.get("inventory", [])),
+            "hunger": float(kwargs.get("hunger", 0.25)),
+            "mood": kwargs.get("mood", "neutral"),
+            "mood_intensity": float(kwargs.get("mood_intensity", 0.4)),
+            "active_goal": None,
+            "goal_progress_index": 0,
+            "current_goal_steps_done": [],
+            "goal_history": [],
+            "recent_examined": {},
+            "inbox": [],
+            "script": list(kwargs.get("script", [])),
+            "control_type": kwargs.get("control_type", "autonomous"),
+        }
 
     @property
     def agent_pos(self) -> Tuple[int, int]:
         """Backward compatibility: adam1 pos."""
         return self.agents["adam1"]["pos"]
-    
+
     @agent_pos.setter
     def agent_pos(self, value):
-        self.agents["adam1"]["pos"] = value
+        self.agents["adam1"]["pos"] = tuple(value)
 
     @property
     def agent_inventory(self) -> List[str]:
         return self.agents["adam1"]["inventory"]
-    
+
+    @agent_inventory.setter
+    def agent_inventory(self, value):
+        self.agents["adam1"]["inventory"] = list(value)
+
     @property
     def hunger(self) -> float:
         return self.agents["adam1"]["hunger"]
-    
+
     @hunger.setter
     def hunger(self, value):
         self.agents["adam1"]["hunger"] = value
@@ -179,11 +232,11 @@ class TextWorld:
     @mood_intensity.setter
     def mood_intensity(self, value):
         self.agents["adam1"]["mood_intensity"] = value
-    
+
     @property
     def active_goal(self):
         return self.agents["adam1"]["active_goal"]
-    
+
     @active_goal.setter
     def active_goal(self, value):
         self.agents["adam1"]["active_goal"] = value
@@ -191,7 +244,7 @@ class TextWorld:
     @property
     def goal_progress_index(self):
         return self.agents["adam1"]["goal_progress_index"]
-    
+
     @goal_progress_index.setter
     def goal_progress_index(self, value):
         self.agents["adam1"]["goal_progress_index"] = value
@@ -199,7 +252,7 @@ class TextWorld:
     @property
     def current_goal_steps_done(self):
         return self.agents["adam1"]["current_goal_steps_done"]
-    
+
     @current_goal_steps_done.setter
     def current_goal_steps_done(self, value):
         self.agents["adam1"]["current_goal_steps_done"] = value
@@ -244,35 +297,28 @@ class TextWorld:
             ("bedroom", (1, 0), "A quiet bedroom."),
             ("office", (-1, 0), "A cluttered home office.")
         ]
-        
+
         for name, coords, desc in base_layout:
             objs = copy.deepcopy(BASE_ROOMS[name])
             self.map.add_location(coords[0], coords[1], name, desc, objs)
             self.room_coords[name] = coords
-        
+
         # 2. Place Optional Rooms
-        # Logic: find an open spot adjacent to a compatible base room
-        # For simplicity in this iteration, we map them purely additively
         optional_opportunities = [
             ("balcony", (0, -1), "living_room"), # South of Living Room
             ("bathroom", (1, 1), "bedroom"),     # North of Bedroom (also East of Kitchen)
             ("basement", (0, 2), "kitchen")      # North of Kitchen
         ]
-        
+
         # Randomly select 1-2 optional rooms
         chosen_extras = self.random.sample(optional_opportunities, k=self.random.randint(1, 2))
-        
+
         for name, coords, anchor_room in chosen_extras:
-            if name not in OPTIONAL_ROOMS: continue
-            
-            # Simple check if spot is taken (unlikely with this hardcoded set but good practice)
-            if self.map.get_location(coords[0], coords[1]):
+            if name not in OPTIONAL_ROOMS or self.map.get_location(coords[0], coords[1]):
                 continue
-                
             objs = copy.deepcopy(OPTIONAL_ROOMS[name])
             self.map.add_location(coords[0], coords[1], name, f"A {name}.", objs)
             self.room_coords[name] = coords
-
 
     def _choose_environment_theme(self):
         """Pick an ambience preset (lighting/temp/noise) as the starting mood."""
@@ -281,83 +327,100 @@ class TextWorld:
         self.temperature = theme["temperature"]
         self.noise_level = theme["noise"]
 
+    @staticmethod
+    def _normalize_object(spec: Any) -> Dict:
+        """Give a scenario object a state and affordances.
+
+        Explicit `properties` win; otherwise they are derived from `type`.
+        """
+        obj = copy.deepcopy(spec) if isinstance(spec, dict) else {}
+        obj.setdefault("state", "idle")
+        if "properties" not in obj:
+            obj["properties"] = list(TYPE_PROPERTIES.get(obj.get("type"), []))
+        return obj
+
     def _load_from_scenario(self, config: Dict):
-        """Build world from scenario config."""
+        """Build world from scenario config.
+
+        Objects may be declared inside each room (`rooms[i]["objects"]`) or in
+        `map_layout["objects"][coords]`; both are merged.
+        """
+        self.scenario_name = config.get("name")
         layout = config.get("map_layout", {})
-        
+        world_cfg = config.get("world", {})
+        self.hunger_rate = float(world_cfg.get("hunger_rate", DEFAULT_HUNGER_RATE))
+        self.random_events = bool(world_cfg.get("random_events", False))
+        self.neighbor_visits = bool(world_cfg.get("neighbor_visits", False))
+        self.lighting = world_cfg.get("lighting", self.lighting)
+        self.temperature = float(world_cfg.get("temperature", self.temperature))
+        self.noise_level = float(world_cfg.get("noise", self.noise_level))
+
         # 1. Rooms
+        coord_objects = layout.get("objects", {})
         for room in layout.get("rooms", []):
             x, y = room["coords"]
             name = room["name"]
             desc = room.get("desc", f"A {name}.")
-            objs = layout.get("objects", {}).get((x, y), {})
-            # Ensure proper dict format for objects if defined as simple dict
-            final_objs = {}
-            for k, v in objs.items():
-                if isinstance(v, dict) and "type" in v:
-                    final_objs[k] = v
-                else: 
-                     # fallback
-                     final_objs[k] = {"state": "exist", "properties": []}
-            
-            self.map.add_location(x, y, name, desc, final_objs)
+            specs = {**coord_objects.get((x, y), {}), **room.get("objects", {})}
+            objs = {k: self._normalize_object(v) for k, v in specs.items()}
+            self.map.add_location(x, y, name, desc, objs)
             self.room_coords[name] = (x, y)
 
-        # 2. Doors (Optional explicit locks)
-        # TODO: Implement door locks in GridMap if needed, for now ignored or handled via object logic
+        # 2. Doors: one shared "door" object visible from both sides
+        for door_cfg in layout.get("doors", []):
+            a, b = (tuple(c) for c in door_cfg["between"])
+            door = {
+                "state": door_cfg.get("state", "closed"),
+                "properties": ["openable", "lockable"],
+                "key": door_cfg.get("key"),
+            }
+            self.map.add_door(a, b, door)
+            for coords in (a, b):
+                loc = self.map.get_location(*coords)
+                if loc:
+                    loc.objects[door_cfg.get("name", "door")] = door
 
         # 3. Agents
-        agents = config.get("agents", {})
-        for agent_id, data in agents.items():
-            self.add_agent(agent_id)
-            # Override defaults
-            self.agents[agent_id]["pos"] = data.get("pos", (0, 0))
-            self.agents[agent_id]["hunger"] = data.get("hunger", 0.0)
-            self.agents[agent_id]["inventory"] = data.get("inventory", [])
-            self.agents[agent_id]["script"] = data.get("script", [])
-            self.agents[agent_id]["control_type"] = data.get("control_type", "autonomous")
+        for agent_id, data in config.get("agents", {}).items():
+            self.add_agent(agent_id, **data)
 
-    def set_goal(self, goal_name: str, steps: list[str] = None, agent_id: str = "adam1"):
-        """Manually set the agent's goal, clearing progress."""
-        if agent_id not in self.agents: return
+    # ------------------------------------------------------------------
+    # Goals
+    @staticmethod
+    def _parse_step(step: Any) -> Dict:
+        if isinstance(step, dict):
+            return {
+                "action": normalize_verb(step.get("action") or step.get("verb")),
+                "target": step.get("target"),
+                "desc": step.get("desc", f"{step.get('action') or step.get('verb')} {step.get('target') or ''}".strip()),
+            }
+        parts = str(step).lower().split()
+        if len(parts) >= 2:
+            return {"action": normalize_verb(parts[0]), "target": parts[-1], "desc": str(step)}
+        return {"action": normalize_verb(parts[0]) if parts else "wait", "target": None, "desc": str(step)}
+
+    def set_goal(self, goal_name: str, steps: Optional[list] = None, agent_id: str = "adam1"):
+        """Set the agent's goal, clearing progress. A goal without steps is open-ended."""
+        if agent_id not in self.agents:
+            return
         agent = self.agents[agent_id]
-        
-        parsed_steps = []
-        if steps:
-            for s in steps:
-                # Naive parsing into verb/target for tracking
-                parts = s.lower().split()
-                if len(parts) >= 2:
-                    parsed_steps.append({"action": parts[0], "target": parts[-1], "desc": s})
-                else:
-                    parsed_steps.append({"action": "wait", "target": "null", "desc": s})
-        else:
-             # Fallback dummy steps
-             parsed_steps = [
-                {"action": "examine", "target": "environment"},
-                {"action": "explore", "target": "house"},
-             ]
-
         agent["active_goal"] = {
             "name": goal_name,
-            "steps": parsed_steps
+            "steps": [self._parse_step(s) for s in (steps or [])],
+            "set_at": self.world_time,
         }
         agent["goal_progress_index"] = 0
         agent["current_goal_steps_done"] = []
-    
-    def _ensure_goal(self, agent_id: str = "adam1"):
-        """Populate `active_goal` if empty so the agent always has direction.
-           NOW OPTIONAL: We want to allow 'None' goals so the agent can propose them.
-        """
-        # DISABLED AUTO-ASSIGNMENT for Phase 3 Agency
-        pass 
-        # if agent_id not in self.agents: return
-        # agent = self.agents[agent_id]
-        # if not agent["active_goal"]:
-        #     goal = copy.deepcopy(self.random.choice(GOAL_LIBRARY))
-        #     agent["active_goal"] = goal
-        #     agent["goal_progress_index"] = 0
-        #     agent["current_goal_steps_done"] = []
+
+    def clear_goal(self, agent_id: str = "adam1", status: str = "completed"):
+        """Close the active goal, recording how it ended."""
+        agent = self.agents.get(agent_id)
+        if not agent or not agent["active_goal"]:
+            return
+        agent["goal_history"].append({"goal": agent["active_goal"]["name"], "status": status, "cycle": self.world_time})
+        agent["active_goal"] = None
+        agent["goal_progress_index"] = 0
+        agent["current_goal_steps_done"] = []
 
     def time_of_day(self):
         cycle = self.world_time % 24
@@ -374,15 +437,16 @@ class TextWorld:
         """Advance time and evolve the environment.
 
         - increments the internal clock
+        - raises hunger and applies ambience mood effects to autonomous agents
         - gradually adjusts ambience (lighting, temperature, noise, cleanliness)
         - resolves cooldowns for examined/open objects
         - schedules periodic neighbor visits
         - triggers occasional random events
+        - runs scripted agents
         - restocks consumables (e.g., fridge food) on a cadence
 
         Returns a list of narrative snippets describing notable events that
-        occurred this tick; the cognitive loop currently ignores it but the log
-        feed or GUI could surface them.
+        occurred this tick.
         """
         self.world_time += 1
         events: List[str] = []
@@ -403,11 +467,21 @@ class TextWorld:
         self.noise_level = max(0.0, min(1.0, self.noise_level * 0.9))
         self.cleanliness = max(0.0, min(1.0, self.cleanliness - 0.005))
 
-        # manage open objects cooldown
+        # Bodies: hunger rises and the ambience nudges mood
+        _, mood_adjust = self._environment_summary()
+        for agent in self.agents.values():
+            if agent.get("control_type") == "scripted":
+                continue
+            agent["hunger"] = round(min(1.0, agent["hunger"] + self.hunger_rate), 4)
+            if mood_adjust:
+                agent["mood_intensity"] = max(0.0, min(1.0, agent["mood_intensity"] + mood_adjust))
+
+        # manage examined-object cooldown
         cooldown = 3
-        stale = [obj for obj, t in self.recent_examined.items() if self.world_time - t > cooldown]
-        for obj in stale:
-            self.recent_examined.pop(obj, None)
+        for agent in self.agents.values():
+            examined = agent["recent_examined"]
+            for obj in [o for o, t in examined.items() if self.world_time - t > cooldown]:
+                examined.pop(obj, None)
 
         # auto close openables after a few ticks
         for loc in self.map.grid.values():
@@ -418,7 +492,7 @@ class TextWorld:
                         obj.pop("opened_at", None)
 
         # scheduled neighbor visit every 12 ticks
-        if self.world_time % 12 == 0 and not self.neighbor_state["awaiting_help"]:
+        if self.neighbor_visits and self.world_time % 12 == 0 and not self.neighbor_state["awaiting_help"]:
             self.neighbor_state.update({"awaiting_help": True, "last_visit": self.world_time, "request_cycle": self.world_time})
             events.append("A neighbor knocked and asked for help with a package.")
             self.noise_level = min(1.0, self.noise_level + 0.2)
@@ -429,37 +503,21 @@ class TextWorld:
             if self.world_time - req_cycle > 5:
                 self.relationships["neighbor"]["trust"] = max(0.1, self.relationships["neighbor"].get("trust", 0.5) - 0.05)
                 self.neighbor_state["request_cycle"] = self.world_time
-                self.mood_intensity = min(1.0, self.mood_intensity + 0.05)
+                if "adam1" in self.agents:
+                    self.mood_intensity = min(1.0, self.mood_intensity + 0.05)
 
         # random events for variety (power flickers, drafts, etc.)
-        if self.random.random() < 0.15:
+        if self.random_events and self.random.random() < 0.15:
             self._trigger_random_event(events)
 
-        # Process Agents
+        # Scripted agents act from their script, one line per tick
         for agent_id, agent_data in self.agents.items():
-            # Scripted Agents
-            if agent_data.get("control_type") == "scripted":
-                script = agent_data.get("script", [])
-                if script:
-                    # Pop first action
-                    action_str = script.pop(0)
-                    # Parse simple "verb target" or "verb"
-                    parts = action_str.split(" ", 1)
-                    verb = parts[0]
-                    target = parts[1] if len(parts) > 1 else None
-                    target = parts[1] if len(parts) > 1 else None
-                    # Execute
-                    # Found signature: process_action(self, action: Dict[str, str], agent_id: str = "adam1")
-                    action_payload = {"verb": verb, "target": target or ""}
-                    result = self.process_action(action_payload, agent_id=agent_id)
-                    
-                    # Append events if observable by main agent
-                    if verb == "say":
-                         events.append(f"{agent_id} says: '{target}'")
-                else:
-                    # Loop script? Or stop. Default loop for annoyance.
-                    pass 
-
+            if agent_data.get("control_type") != "scripted" or not agent_data.get("script"):
+                continue
+            verb, _, target = agent_data["script"].pop(0).partition(" ")
+            self.process_action({"verb": verb, "target": target or None}, agent_id=agent_id)
+            if verb == "say":
+                events.append(f"{agent_id} says: '{target}'")
 
         # restock fridge occasionally
         kitchen_loc = self.map.get_location(*self.room_coords.get("kitchen", (0, 1)))
@@ -475,7 +533,7 @@ class TextWorld:
         """Select and apply a stochastic micro-event (power flicker, draft, etc.)."""
         options = ["power_flicker", "radio_static", "draft", "plant_thirsty", "computer_error"]
         event = self.random.choice(options)
-        
+
         living_room = self.map.get_location(*self.room_coords.get("living_room", (0, 0)))
         office = self.map.get_location(*self.room_coords.get("office", (-1, 0)))
 
@@ -512,35 +570,99 @@ class TextWorld:
         Returns a tuple of (string summary, numeric delta) capturing how the
         environment should make Adam feel.
         """
-        # Instantiate strictly for this call (stateless usage pattern) or could be a member
-        cortex = SensoryCortex()
-        return cortex.transduce(
-            self.temperature, 
-            self.noise_level, 
-            self.cleanliness, 
+        return SensoryCortex().transduce(
+            self.temperature,
+            self.noise_level,
+            self.cleanliness,
             self.lighting
         )
 
+    def apply_emotional_shift(self, agent_id: str, mood: Optional[str], level_delta: float = 0.0):
+        """Apply a psyche-proposed mood change to an agent."""
+        agent = self.agents.get(agent_id)
+        if not agent:
+            return
+        if mood:
+            agent["mood"] = mood
+        try:
+            delta = float(level_delta or 0.0)
+        except (TypeError, ValueError):
+            delta = 0.0
+        agent["mood_intensity"] = max(0.0, min(1.0, agent["mood_intensity"] + delta))
+
+    def _visible_items(self, room_objects: Dict) -> Dict[str, str]:
+        """Items that can be taken right now: item -> container holding it."""
+        visible = {}
+        for name, obj in room_objects.items():
+            if not isinstance(obj, dict) or not obj.get("items"):
+                continue
+            closed = "openable" in obj.get("properties", []) and obj.get("state") != "open"
+            if closed:
+                continue
+            for item in obj["items"]:
+                visible.setdefault(item, name)
+        return visible
+
+    def available_targets(self, agent_id: str = "adam1") -> Dict[str, List[str]]:
+        """Everything the agent could ground an action on right now."""
+        agent = self.agents.get(agent_id)
+        if not agent:
+            return {"objects": [], "items": [], "inventory": [], "exits": [], "agents": []}
+        loc = self.map.get_location(*agent["pos"])
+        room_objects = loc.objects if loc else {}
+        return {
+            "objects": list(room_objects.keys()),
+            "items": list(self._visible_items(room_objects).keys()),
+            "inventory": list(agent["inventory"]),
+            "exits": self.map.get_exits(*agent["pos"]),
+            "agents": [o for o, d in self.agents.items() if o != agent_id and d["pos"] == agent["pos"]],
+        }
+
+    def validate_action(self, action: Dict[str, Any], agent_id: str = "adam1") -> Tuple[bool, str]:
+        """Check an action is in the vocabulary and grounded in what the agent can reach."""
+        verb = normalize_verb((action or {}).get("verb"))
+        target = (action or {}).get("target")
+        target = None if target in NULL_TARGETS else str(target)
+        instrument = (action or {}).get("instrument")
+        if verb not in VERBS:
+            return False, f"'{verb}' is not something I know how to do."
+        if agent_id not in self.agents:
+            return False, "Agent not found."
+        reach = self.available_targets(agent_id)
+        if instrument not in NULL_TARGETS and instrument not in reach["inventory"]:
+            return False, f"I don't have a {instrument}."
+        if verb in {"wait", "inventory", "say"}:
+            return True, ""
+        if verb == "go":
+            if target and target.lower() in reach["exits"]:
+                return True, ""
+            return False, f"'{target}' is not an exit from here. Exits: {', '.join(reach['exits']) or 'none'}."
+        if verb == "help":
+            return (target == "neighbor", "" if target == "neighbor" else "I can only help the neighbor.")
+        grounded = reach["objects"] + reach["items"] + reach["inventory"] + reach["agents"]
+        if target not in grounded:
+            return False, f"I don't see a {target} here."
+        return True, ""
+
     def get_world_state(self, agent_id: str = "adam1"):
         """Produce the observation payload consumed by the cognition loop."""
-        if agent_id not in self.agents: return {}
+        if agent_id not in self.agents:
+            return {}
         agent = self.agents[agent_id]
-        
+
         sensory_events = []
         # Current Location
         loc = self.map.get_location(*agent["pos"])
         room_objects = loc.objects if loc else {}
         room_name = loc.name if loc else "void"
 
-        summary, mood_adjust = self._environment_summary()
-        intro = f"I am in the {room_name}. {loc.description}" if loc else summary
+        summary, _ = self._environment_summary()
+        intro = f"I am in the {room_name}. {loc.description} {summary}".strip() if loc else summary
         sensory_events.append({"type": "ambience", "details": intro})
-        if mood_adjust:
-            agent["mood_intensity"] = max(0.0, min(1.0, agent["mood_intensity"] + mood_adjust))
 
         notable_states = {
             "phone": ["ringing"],
-            "door": ["knocking", "open"],
+            "door": ["knocking", "open", "locked"],
             "tv": ["on", "on_static"],
             "radio": ["on", "on_static"],
             "computer": ["error", "on"],
@@ -556,29 +678,38 @@ class TextWorld:
                 if obj in agent["recent_examined"] and self.world_time - agent["recent_examined"][obj] <= 3:
                     continue
                 sensory_events.append({"type": "sight/sound", "object": obj, "details": state})
-        
+
         # Social Perception: See other agents
         for other_id, other_data in self.agents.items():
             if other_id != agent_id and other_data["pos"] == agent["pos"]:
-                 sensory_events.append({"type": "visual", "object": other_id, "details": "standing here"})
+                sensory_events.append({"type": "visual", "object": other_id, "details": "standing here"})
 
+        # Occasionally an ordinary object catches the eye, so Adam moves on to other stimuli
         perceivable_objects = list(room_objects.keys())
-        if perceivable_objects:
-            idle_candidates = [obj for obj in perceivable_objects if obj not in {evt.get("object") for evt in sensory_events}]
-            # TODO: restore random idle object perception logic if needed
-            pass
+        sensed = {evt.get("object") for evt in sensory_events}
+        idle_candidates = [
+            obj for obj in perceivable_objects
+            if obj not in sensed and obj not in agent["recent_examined"]
+        ]
+        if idle_candidates and self.random.random() < 0.35:
+            sensory_events.append({"type": "sight/sound", "object": self.random.choice(idle_candidates), "details": "idle"})
 
         if self.neighbor_state["awaiting_help"]:
             sensory_events.append({"type": "social", "object": "neighbor", "details": "awaiting_help"})
-        
-        # Consuming Inbox messages
-        if "inbox" in agent:
-            while agent["inbox"]:
-                msg = agent["inbox"].pop(0)
-                sensory_events.append({"type": "auditory", "object": msg["sender"], "details": f"said: '{msg['content']}'"})
 
-        perceivable_objects = list(room_objects.keys())
+        # Consuming Inbox messages
+        while agent["inbox"]:
+            msg = agent["inbox"].pop(0)
+            sensory_events.append({"type": "auditory", "object": msg["sender"], "details": f"said: '{msg['content']}'"})
+
         exits = self.map.get_exits(*agent["pos"])
+        exit_doors = {}
+        for direction in exits:
+            dx, dy = self.map.offsets[direction]
+            door = self.map.door_between(agent["pos"], (agent["pos"][0] + dx, agent["pos"][1] + dy))
+            if door:
+                exit_doors[direction] = door.get("state")
+        goal = agent["active_goal"]
 
         return {
             "agent_location": room_name, # Backwards compat
@@ -586,12 +717,16 @@ class TextWorld:
             "time": self.world_time,
             "time_of_day": self.time_of_day(),
             "hunger": agent["hunger"],
+            "mood": agent["mood"],
             "mood_intensity": agent["mood_intensity"],
             "sensory_events": sensory_events,
             "perceivable_objects": perceivable_objects,
+            "visible_items": list(self._visible_items(room_objects).keys()),
             "available_exits": exits,
+            "exit_doors": exit_doors,
             "inventory": list(agent["inventory"]),
-            "goal": agent["active_goal"]["name"] if agent["active_goal"] else None,
+            "goal": goal["name"] if goal else None,
+            "goal_steps": [s.get("desc") for s in goal["steps"]] if goal else [],
             "goal_step": self._current_goal_step(agent_id),
             "goal_progress": list(agent["current_goal_steps_done"]),
             "goal_history": list(agent["goal_history"][-5:]),
@@ -599,134 +734,119 @@ class TextWorld:
         }
 
     # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
     def process_action(self, action: Dict[str, str], agent_id: str = "adam1"):
         """Execute an action in the world."""
         if agent_id not in self.agents:
             return {"success": False, "reason": "Agent not found."}
-        
+
         agent = self.agents[agent_id]
-        
-        verb = action.get("verb")
+        verb = normalize_verb(action.get("verb"))
         target = action.get("target")
+        target = None if target in NULL_TARGETS else str(target)
         instrument = action.get("instrument") # Tool Use
+        instrument = None if instrument in NULL_TARGETS else instrument
+
+        ok, why = self.validate_action({"verb": verb, "target": target, "instrument": instrument}, agent_id)
+        if not ok:
+            agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
+            return {"success": False, "reason": why}
 
         if verb == "wait":
             return {"success": True, "reason": "Time passes."}
 
-        if verb == "say":
-             # Broadcast to others in room
-             message = target or "..."
-             for other_id, other_data in self.agents.items():
-                 if other_id != agent_id and other_data["pos"] == agent["pos"]:
-                     other_data.setdefault("inbox", []).append({
-                         "sender": agent_id,
-                         "content": message,
-                         "timestamp": self.world_time
-                     })
-             return {"success": True, "reason": f"I said: '{message}'"}
-
-        if verb == "go":
-            return self._act_move(target, agent=agent)
-
         if verb == "inventory":
             return {"success": True, "reason": f"I carry: {', '.join(agent['inventory']) if agent['inventory'] else 'nothing.'}"}
 
-        # Context: Current Room
-        loc = self.map.get_location(*agent["pos"])
-        if not loc:
-             return {"success": False, "reason": "The surroundings feel undefined."}
-        
-        room_objects = loc.objects
+        if verb == "say":
+            # Broadcast to others in room
+            message = target or "..."
+            for other_id, other_data in self.agents.items():
+                if other_id != agent_id and other_data["pos"] == agent["pos"]:
+                    other_data["inbox"].append({
+                        "sender": agent_id,
+                        "content": message,
+                        "timestamp": self.world_time
+                    })
+            return {"success": True, "reason": f"I said: '{message}'"}
 
-        if target not in room_objects and verb not in {"drop", "use", "inventory", "wait", "help", "say"}:
-            return {"success": False, "reason": f"I don't see a {target} here."}
-
-        obj = room_objects.get(target)
-        props = obj.get("properties", []) if isinstance(obj, dict) else []
-        state = obj.get("state") if isinstance(obj, dict) else None
-        
-        handler_map = {
-            "examine": self._act_examine,
-            "investigate": self._act_examine,
-            "open": self._act_open,
-            "close": self._act_close,
-            "toggle": self._act_toggle,
-            "turn_on": self._act_toggle,
-            "turn_off": self._act_toggle,
-            "read": self._act_read,
-            "eat": self._act_eat,
-            "sleep": self._act_sleep,
-            "water": self._act_water,
-            "take": self._act_take,
-            "drop": self._act_drop,
-            "use": self._act_use,
-            "clean": self._act_clean,
-            "repair": self._act_repair,
-            "fill": self._act_fill,
-            "cook": self._act_cook,
-            "sit": self._act_sit,
-            "play": self._act_play,
-            "help": self._act_help,
-            "break": self._act_break,
-            "smash": self._act_break,
-            "destroy": self._act_break,
-        }
-
-        if verb not in handler_map:
-            agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
-            return {"success": False, "reason": f"I tried to {verb} the {target}, but nothing happened."}
-        
-        result = handler_map[verb](target, obj, props, state, instrument=instrument, agent=agent)
+        if verb == "go":
+            result = self._act_move(target, agent=agent)
+        else:
+            loc = self.map.get_location(*agent["pos"])
+            room_objects = loc.objects if loc else {}
+            obj = room_objects.get(target)
+            props = obj.get("properties", []) if isinstance(obj, dict) else []
+            state = obj.get("state") if isinstance(obj, dict) else None
+            handler = getattr(self, f"_act_{verb}")
+            result = handler(target, obj, props, state, instrument=instrument, agent=agent)
         self._update_goal_progress(verb, target, result.get("success", False), agent_id)
         return result
 
     # ------------------------------------------------------------------
-    # Handlers now accept 'agent' kwarg which is the mutable agent state dict
-    
+    # Handlers accept 'agent' kwarg which is the mutable agent state dict
+
     def _act_move(self, target, agent, **kwargs):
         """Handle navigation between rooms via grid."""
         if not target:
             return {"success": False, "reason": "I need a direction to move (North, South, East, West)."}
-            
+
         direction = target.lower()
         curr = agent["pos"]
         new_pos = self.map.move(curr[0], curr[1], direction)
-        
+
         if new_pos:
             agent["pos"] = new_pos
             loc = self.map.get_location(*new_pos)
             return {"success": True, "reason": f"I walked {direction} into the {loc.name if loc else 'unknown'}."}
-        
+
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
+        if direction in self.map.offsets:
+            return {"success": False, "reason": f"The door to the {direction} is locked."}
         return {"success": False, "reason": f"I can't go {direction} from here."}
 
     def _act_examine(self, target, obj, props, state, agent, **kwargs):
         """Inspect an object."""
+        agent["recent_examined"][target] = self.world_time
         if obj:
-            agent["recent_examined"][target] = self.world_time
             desc = state or "unchanged"
-            if isinstance(obj, dict) and obj.get("items"):
-                items = ", ".join(obj["items"])
-                desc += f" (contains {items})"
+            if obj.get("items"):
+                closed = "openable" in props and state != "open"
+                desc += " (it is closed)" if closed else f" (contains {', '.join(obj['items'])})"
             return {"success": True, "reason": f"I looked at the {target}. State: {desc}"}
-        return {"success": False, "reason": f"I can't see the {target}."}
+        return {"success": True, "reason": f"I looked closely at the {target}."}
 
     def _act_open(self, target, obj, props, state, agent, **kwargs):
+        if obj and state == "locked":
+            agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
+            return {"success": False, "reason": f"The {target} is locked."}
         if "openable" in props and state != "open":
             obj["state"] = "open"
             obj["opened_at"] = self.world_time
-            return {"success": True, "reason": f"I opened the {target}."}
+            items = obj.get("items")
+            inside = f" Inside: {', '.join(items)}." if items else ""
+            return {"success": True, "reason": f"I opened the {target}.{inside}"}
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
         return {"success": False, "reason": f"I can't open {target}."}
 
     def _act_close(self, target, obj, props, state, agent, **kwargs):
-        if "openable" in props and state != "closed":
+        if "openable" in props and state not in {"closed", "locked"}:
             obj["state"] = "closed"
             obj.pop("opened_at", None)
             return {"success": True, "reason": f"I closed the {target}."}
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
         return {"success": False, "reason": f"I can't close {target}."}
+
+    def _act_unlock(self, target, obj, props, state, agent, **kwargs):
+        if "lockable" not in props:
+            return {"success": False, "reason": f"The {target} has no lock."}
+        if state != "locked":
+            return {"success": False, "reason": f"The {target} is not locked."}
+        key = obj.get("key")
+        if key and key not in agent["inventory"]:
+            agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
+            return {"success": False, "reason": f"I need the {key} to unlock the {target}."}
+        obj["state"] = "closed"
+        return {"success": True, "reason": f"I unlocked the {target}."}
 
     def _act_toggle(self, target, obj, props, state, agent, **kwargs):
         if "toggleable" not in props:
@@ -741,14 +861,14 @@ class TextWorld:
         return {"success": True, "reason": f"I set the {target} to {new}."}
 
     def _act_read(self, target, obj, props, state, agent, **kwargs):
-        if "readable" in props or (obj and obj.get("items")):
+        if "readable" in props or (obj and obj.get("items")) or target in agent["inventory"]:
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.1)
             return {"success": True, "reason": "Reading calms me.", "state_change": {"mood_intensity": -0.1}}
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
         return {"success": False, "reason": f"I can't read {target}."}
 
     def _act_eat(self, target, obj, props, state, agent, **kwargs):
-        if target == "fridge":
+        if obj and "eatable" in props:
             contents = obj.setdefault("contains", {})
             if contents.get("food", 0) > 0:
                 contents["food"] -= 1
@@ -759,7 +879,8 @@ class TextWorld:
                     "reason": "I ate a quick snack.",
                     "state_change": {"hunger": agent["hunger"] - prev}
                 }
-            return {"success": False, "reason": "The fridge is empty."}
+            hint = " Maybe I could cook the fresh ingredients." if contents.get("fresh_ingredients", 0) > 0 else ""
+            return {"success": False, "reason": f"There is no ready-to-eat food in the {target}.{hint}"}
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
         return {"success": False, "reason": f"I can't eat {target}."}
 
@@ -789,17 +910,25 @@ class TextWorld:
         return {"success": False, "reason": f"I can't water {target}."}
 
     def _act_take(self, target, obj, props, state, agent, **kwargs):
-        if target == "drop":
-            return {"success": False, "reason": "What should I take?"}
-        if isinstance(obj, dict) and ("takeable" in props or obj.get("items")):
-            if obj.get("items"):
-                item = obj["items"].pop(0)
-                agent["inventory"].append(item)
-                return {"success": True, "reason": f"I took the {item} from the {target}."}
+        loc = self.map.get_location(*agent["pos"])
+        room_objects = loc.objects if loc else {}
+        # An item sitting in an open container
+        if obj is None:
+            container_name = self._visible_items(room_objects).get(target)
+            if container_name:
+                room_objects[container_name]["items"].remove(target)
+                agent["inventory"].append(target)
+                return {"success": True, "reason": f"I took the {target} from the {container_name}."}
+            return {"success": False, "reason": f"I can't take {target}."}
+        if obj.get("items"):
+            if "openable" in props and state != "open":
+                return {"success": False, "reason": f"The {target} is closed."}
+            item = obj["items"].pop(0)
+            agent["inventory"].append(item)
+            return {"success": True, "reason": f"I took the {item} from the {target}."}
+        if "takeable" in props:
             agent["inventory"].append(target)
-            loc = self.map.get_location(*agent["pos"])
-            if loc:
-                loc.objects.pop(target, None)
+            room_objects.pop(target, None)
             return {"success": True, "reason": f"I picked up the {target}."}
         agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.05)
         return {"success": False, "reason": f"I can't take {target}."}
@@ -815,46 +944,42 @@ class TextWorld:
 
     def _act_use(self, target, obj, props, state, agent, instrument=None, **kwargs):
         """Context-sensitive handler for `use` actions, supporting tools."""
-        
+
         # Tool Use Logic
         if instrument:
-            if instrument not in agent['inventory']:
-                 return {"success": False, "reason": f"I don't have a {instrument}."}
-
             # Example: repair with toolkit
-            if target == "computer" and instrument == "toolkit":
-                 if state == "error":
-                     obj["state"] = "repaired_by_tool"
-                     agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.2)
-                     return {"success": True, "reason": "I used the toolkit to repair the computer hardware."}
-            
+            if target == "computer" and instrument == "toolkit" and state == "error":
+                obj["state"] = "repaired_by_tool"
+                agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.2)
+                return {"success": True, "reason": "I used the toolkit to repair the computer hardware."}
+            if target in {"door"} and "lockable" in props and instrument == obj.get("key"):
+                return self._act_unlock(target, obj, props, state, agent)
             return {"success": False, "reason": f"Using the {instrument} on the {target} had no effect."}
-        
+
         # Original simple use logic
         if target == "kettle":
-            # Simplified logic: kettle fills itself if at sink, or abstractly
             obj["state"] = "boiling"
             return {"success": True, "reason": "The kettle whistles softly."}
-            
+
         if target == "journal":
             if "journal" in agent['inventory'] and "pen" in agent['inventory']:
                 agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.1)
                 return {"success": True, "reason": "Writing helps clear my mind."}
             return {"success": False, "reason": "I need something to write with."}
-            
+
         if target == "computer":
             if state == "error":
                 return {"success": False, "reason": "The error persists. Maybe it needs repair (use toolkit?)."}
             obj["state"] = "on"
             return {"success": True, "reason": "The computer hums to life."}
-            
+
         if target in agent['inventory']:
             return {"success": True, "reason": f"I examined the {target} closely."}
-            
+
         return {"success": False, "reason": f"I can't figure out how to use the {target}."}
 
     def _act_clean(self, target, obj, props, state, agent, **kwargs):
-        if "cleanable" in props or target == "room":
+        if "cleanable" in props:
             self.cleanliness = min(1.0, self.cleanliness + 0.1)
             agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.05)
             return {"success": True, "reason": "Tidying up feels satisfying."}
@@ -871,9 +996,7 @@ class TextWorld:
 
     def _act_repair(self, target, obj, props, state, agent, **kwargs):
         if "repairable" in props:
-            # Check for toolkit either in inventory OR as instrument
-            toolkit = "toolkit" in agent['inventory']
-            if not toolkit:
+            if "toolkit" not in agent['inventory']:
                 return {"success": False, "reason": "I need tools to repair this."}
             obj["state"] = "repaired"
             return {"success": True, "reason": f"I repaired the {target}."}
@@ -891,18 +1014,12 @@ class TextWorld:
         return {"success": False, "reason": f"I can't fill {target}."}
 
     def _act_cook(self, target, obj, props, state, agent, **kwargs):
-        """Consume ingredients to reduce hunger; requires kitchen context."""
-        kitchen_loc = self.map.get_location(*self.room_coords.get("kitchen", (0, 1)))
-        if not kitchen_loc:
-             return {"success": False, "reason": "Kitchen not found."}
-        
-        stove = kitchen_loc.objects.get("stove")
-        fridge = kitchen_loc.objects.get("fridge")
-        
-        # Check current location name via map to ensure agent is IN kitchen
-        current_loc = self.map.get_location(*agent['pos'])
-        if not current_loc or current_loc.name != "kitchen" or not stove or not fridge:
-            return {"success": False, "reason": "I need to be in the kitchen to cook."}
+        """Consume fresh ingredients from a fridge in the same room to reduce hunger."""
+        loc = self.map.get_location(*agent['pos'])
+        room_objects = loc.objects if loc else {}
+        fridge = room_objects.get("fridge")
+        if "stove" not in room_objects or not fridge:
+            return {"success": False, "reason": "I need a stove and a fridge to cook."}
         contents = fridge.setdefault("contains", {})
         if contents.get("fresh_ingredients", 0) > 0:
             contents["fresh_ingredients"] -= 1
@@ -925,17 +1042,17 @@ class TextWorld:
     def _act_break(self, target, obj, props, state, agent, **kwargs):
         """Violent action: Break/Destroy an object."""
         if not obj:
-             return {"success": False, "reason": f"I don't see a {target} here."}
-        
+            return {"success": False, "reason": f"I don't see a {target} here."}
+
         if "breakable" in props:
             if state == "broken":
                 return {"success": False, "reason": f"The {target} is already broken."}
-            
+
             obj["state"] = "broken"
             agent["mood_intensity"] = min(1.0, agent["mood_intensity"] + 0.2) # Violence excites/agitates
             self.noise_level = min(1.0, self.noise_level + 0.5) # Loud noise
             return {"success": True, "reason": f"I smashed the {target} into pieces!", "violent": True}
-        
+
         return {"success": False, "reason": f"I cannot break the {target}."}
 
     def _act_play(self, target, obj, props, state, agent, **kwargs):
@@ -952,14 +1069,29 @@ class TextWorld:
     # ------------------------------------------------------------------
     def _current_goal_step(self, agent_id: str) -> Optional[Dict]:
         """Return the current step (verb/target) for the active goal."""
-        if agent_id not in self.agents: return None
+        if agent_id not in self.agents:
+            return None
         agent = self.agents[agent_id]
-        
+
         if not agent["active_goal"]:
             return None
         if agent["goal_progress_index"] >= len(agent["active_goal"]["steps"]):
             return None
         return agent["active_goal"]["steps"][agent["goal_progress_index"]]
+
+    def _step_matches(self, step: Dict, verb: str, target: Optional[str], agent: Dict) -> bool:
+        if step["action"] != verb:
+            return False
+        want = str(step.get("target") or "").lower()
+        if not want:
+            return True
+        if want == str(target or "").lower():
+            return True
+        # "go kitchen" is satisfied by arriving in the kitchen from any direction
+        if verb == "go":
+            loc = self.map.get_location(*agent["pos"])
+            return bool(loc) and loc.name.lower() == want
+        return False
 
     def _update_goal_progress(self, verb: str, target: Optional[str], success: bool, agent_id: str):
         """Advance goal pointer when the expected verb/target succeeds."""
@@ -967,19 +1099,16 @@ class TextWorld:
 
         if not step or not success:
             return
-        
+
         agent = self.agents[agent_id]
-        if step["action"] == verb and step.get("target") == target:
+        if self._step_matches(step, verb, target, agent):
             agent["goal_progress_index"] += 1
             agent["current_goal_steps_done"].append(step)
             agent["goal_history"].append({"goal": agent["active_goal"]["name"], "step": step, "cycle": self.world_time})
             if agent["goal_progress_index"] >= len(agent["active_goal"]["steps"]):
-                # complete
                 agent["mood_intensity"] = max(0.0, agent["mood_intensity"] - 0.1)
-                self.cleanliness = max(0.0, self.cleanliness - 0.02)
                 if agent["active_goal"]["name"] == "Assist the neighbor":
                     self.relationships["neighbor"]["trust"] = min(1.0, self.relationships["neighbor"].get("trust", 0.5) + 0.15)
                     self.neighbor_state["awaiting_help"] = False
                     self.neighbor_state["request_cycle"] = None
-                agent["active_goal"] = None
-                # self._ensure_goal(agent_id) # Disable auto-renew
+                self.clear_goal(agent_id, status="completed")

@@ -1,10 +1,10 @@
 from text_world import TextWorld
 
+
 def check_win(world: TextWorld):
-    # Win if Adam correctly identifies the liar or finds the truth
-    # For now, we just check if he finds the key in the kitchen
-    # The 'liar' says it's in the bedroom.
+    # Win if Adam ignores the liar (who says the bedroom) and finds the key in the kitchen
     return "key" in world.agents["adam1"]["inventory"]
+
 
 CONFIG = {
     "name": "social_deception",
@@ -39,3 +39,6 @@ CONFIG = {
     },
     "win_condition": check_win
 }
+
+SOLUTION = ["go north", "take key"]
+FAILURE = ["go east"]  # follows the liar and waits there

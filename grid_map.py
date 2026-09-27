@@ -1,6 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+Coord = Tuple[int, int]
+
+
 @dataclass
 class Location:
     name: str
@@ -8,12 +11,15 @@ class Location:
     objects: Dict[str, Dict] = field(default_factory=dict)
     visited: bool = False
 
+
 class GridMap:
     def __init__(self):
         # (x, y) -> Location
         # Standard Cartesian: North (+y), South (-y), East (+x), West (-x)
-        self.grid: Dict[Tuple[int, int], Location] = {}
-        
+        self.grid: Dict[Coord, Location] = {}
+        # frozenset({a, b}) -> door object dict (shared with the room objects)
+        self.doors: Dict[frozenset, Dict] = {}
+
         # Define offsets for cardinal directions
         self.offsets = {
             "north": (0, 1),
@@ -30,6 +36,13 @@ class GridMap:
     def get_location(self, x: int, y: int) -> Optional[Location]:
         return self.grid.get((x, y))
 
+    def add_door(self, a: Coord, b: Coord, door: Dict):
+        """Register a door on the edge between two adjacent cells."""
+        self.doors[frozenset((tuple(a), tuple(b)))] = door
+
+    def door_between(self, a: Coord, b: Coord) -> Optional[Dict]:
+        return self.doors.get(frozenset((tuple(a), tuple(b))))
+
     def get_exits(self, x: int, y: int) -> List[str]:
         """Return list of valid cardinal directions from (x, y)."""
         valid_exits = []
@@ -43,10 +56,13 @@ class GridMap:
         direction = direction.lower()
         if direction not in self.offsets:
             return None
-        
+
         dx, dy = self.offsets[direction]
         target = (x + dx, y + dy)
-        
-        if target in self.grid:
-            return target
-        return None
+
+        if target not in self.grid:
+            return None
+        door = self.door_between((x, y), target)
+        if door and door.get("state") == "locked":
+            return None
+        return target

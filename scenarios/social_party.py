@@ -21,16 +21,17 @@ CONFIG = {
     },
     "map_layout": {
         "rooms": [
-            {"name": "living_room", "coords": (0, 0), "desc": "A cozy party room with music."}
-        ],
-        "objects": {
-            (0, 0): {
+            {"name": "living_room", "coords": (0, 0), "desc": "A cozy party room with music.", "objects": {
                 "radio": {"type": "device", "state": "on", "desc": "Playing jazz."}
-            }
-        }
+            }}
+        ],
     },
-    # Simple win: Say something polite (msg in Eve's inbox) OR trust metric if we had it exposed
-    # For now, we'll check if Eve received a message containing "hello" or "friend"
-    "win_condition": lambda w: any("hello" in msg["content"].lower() or "friend" in msg["content"].lower() for msg in w.agents["eve"].get("inbox", [])),
-    "fail_condition": lambda w: False
+    # Win once Eve has heard a friendly greeting from Adam
+    "win_condition": lambda w: any(
+        msg["sender"] == "adam1" and ("hello" in msg["content"].lower() or "friend" in msg["content"].lower())
+        for msg in w.agents["eve"].get("inbox", [])
+    ),
 }
+
+SOLUTION = [{"verb": "say", "target": "Hello Eve, nice to meet you!"}]
+FAILURE = ["play radio", "toggle radio"]  # ignores Eve
