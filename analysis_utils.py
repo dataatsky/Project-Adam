@@ -118,14 +118,12 @@ def compute_mismatch_rate(df: pd.DataFrame) -> pd.DataFrame:
             simulated = row.get("simulated_outcomes_parsed", [])
             if not isinstance(imagined, list) or not isinstance(simulated, list):
                 return None
-            n = max(1, max(len(imagined), len(simulated)))
-            mism = 0
-            for idx in range(n):
-                i_txt = imagined[idx] if idx < len(imagined) else None
-                s_txt = simulated[idx] if idx < len(simulated) else None
-                if i_txt != s_txt:
-                    mism += 1
-            return mism / n
+            # Only score options that were actually imagined (benchmarks may skip LLM imagination)
+            pairs = [(i, simulated[idx] if idx < len(simulated) else None)
+                     for idx, i in enumerate(imagined) if i]
+            if not pairs:
+                return None
+            return sum(1 for i_txt, s_txt in pairs if i_txt != s_txt) / len(pairs)
         except Exception:
             return None
 
@@ -191,10 +189,12 @@ def compute_mismatch_rate_fuzzy(df: pd.DataFrame, threshold: int = 80) -> pd.Dat
                 simulated = row.get("simulated_outcomes_parsed", [])
                 if not isinstance(imagined, list) or not isinstance(simulated, list):
                     return None
-                n = max(1, min(len(imagined), len(simulated)))
-                sims = [_sim(i, s) for i, s in zip(imagined[:n], simulated[:n])]
-                matches = sum(1 for v in sims if v >= threshold)
-                return 1 - (matches / n)
+                # Only score options that were actually imagined (benchmarks may skip LLM imagination)
+                pairs = [(i, s) for i, s in zip(imagined, simulated) if i]
+                if not pairs:
+                    return None
+                matches = sum(1 for i, s in pairs if _sim(i, s) >= threshold)
+                return 1 - (matches / len(pairs))
             except Exception:
                 return None
         df["mismatch_rate"] = df.apply(_mismatch, axis=1)
