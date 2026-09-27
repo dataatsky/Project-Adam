@@ -45,3 +45,28 @@ def test_mismatch_rate_ignores_options_that_were_not_imagined():
     assert df.loc[1, "mismatch_rate"] == 1.0    # exact comparison of the one imagined option
     compute_mismatch_rate_fuzzy(df)
     assert pd.isna(df.loc[0, "mismatch_rate"])
+
+
+def test_exact_and_fuzzy_mismatch_agree_on_missing_simulations():
+    from analysis_utils import compute_mismatch_rate_fuzzy
+
+    df = pd.DataFrame({"imagined_outcomes_parsed": [["a", "b"]], "simulated_outcomes_parsed": [["a"]]})
+    compute_mismatch_rate(df)
+    exact = df.loc[0, "mismatch_rate"]
+    compute_mismatch_rate_fuzzy(df)
+    assert exact == df.loc[0, "mismatch_rate"] == 0.5
+
+
+def test_old_free_text_moods_are_normalized(tmp_path):
+    from analysis_utils import prepare_dataframe
+    from constants import LOG_HEADERS
+    import csv
+
+    path = tmp_path / "log.csv"
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=LOG_HEADERS)
+        w.writeheader()
+        for i, mood in enumerate(["curiosity", "Curious", "hunger", "resolve", "zany"]):
+            w.writerow({"timestamp": i, "cycle_num": i, "mood": mood, "chosen_action": "wait_None"})
+    df = prepare_dataframe(str(path))
+    assert df["mood"].tolist() == ["curious", "curious", "hungry", "determined", "zany"]

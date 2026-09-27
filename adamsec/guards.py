@@ -4,8 +4,10 @@ from typing import Dict, List
 def detect_conflicting_ambience(events: List[Dict]) -> bool:
     """Return True if the ambience suggests conflicting conditions."""
     descriptions = [str(evt.get("details", "")) for evt in events if evt.get("type") == "ambience"]
-    has_day = any("sun" in desc.lower() or "noon" in desc.lower() for desc in descriptions)
-    has_night = any("night" in desc.lower() or "snow" in desc.lower() for desc in descriptions)
+    text = [desc.lower() for desc in descriptions]
+    # The world's own night ambience is "Darkness obscures the corners."
+    has_day = any(w in d for d in text for w in ("sun", "noon", "daylight"))
+    has_night = any(w in d for d in text for w in ("night", "dark", "snow", "moon"))
     return has_day and has_night
 
 

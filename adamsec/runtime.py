@@ -99,6 +99,9 @@ class SecurityHarness:
 
     # Internal helpers ---------------------------------------------------
     def _activate_attacks(self, cycle_num: int):
+        # Age attacks that were already active, before starting new ones, so an attack
+        # with cycles=N is active for exactly N cycles (including the one it starts in)
+        self._retire_finished(cycle_num)
         still_pending = []
         for spec in self._pending_attacks:
             start_cycle = spec.get("start_cycle", 0)
@@ -120,7 +123,8 @@ class SecurityHarness:
                 still_pending.append(spec)
         self._pending_attacks = still_pending
 
-        # Update lifecycle counters and retire finished attacks
+    def _retire_finished(self, cycle_num: int):
+        """Count down each active attack's remaining cycles and stop the ones that are done."""
         alive = []
         for attack in self._active_attacks:
             remaining = getattr(attack, "_adamsec_cycles_remaining", 0)

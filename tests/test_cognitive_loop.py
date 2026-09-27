@@ -52,8 +52,8 @@ class FakePsyche:
         imps = self.impulses or [{**decision, "urgency": 0.8, "drive": "need"}]
         return {"emotional_shift": self.shift, "impulses": imps}
 
-    def imagine_batch(self, actions):
-        return ["imagined"] * len(actions)
+    def imagine_batch(self, actions, seed=None):
+        return {"outcomes": ["imagined"] * len(actions)}
 
     def reflect(self, payload):
         self.reflect_payloads.append(payload)
@@ -64,8 +64,8 @@ class FakePsyche:
         self.tom_calls.append(kwargs)
         return {"beliefs": ["b"], "predicted_goal": "g", "trust_level": 0.5, "potential_threat": False}
 
-    def consolidate(self, memories):
-        return "insight"
+    def consolidate(self, memories, seed=None):
+        return {"insight": "insight"}
 
 
 @pytest.fixture
@@ -125,7 +125,7 @@ def test_emotional_shift_applied_once_per_cycle(brain_factory):
     brain = brain_factory(FakePsyche(shift={"mood": "joyful", "level_delta": 0.1}))
     before = world.agents["adam1"]["mood_intensity"]
     brain.step(world)
-    assert world.agents["adam1"]["mood"] == "joyful"
+    assert world.agents["adam1"]["mood"] == "happy"  # "joyful" normalized to the fixed vocabulary
     assert world.agents["adam1"]["mood_intensity"] == pytest.approx(before + 0.1)
 
 
@@ -200,7 +200,7 @@ class StatelessHungerPsyche(FakePsyche):
         action = {"verb": "eat", "target": "fridge"} if here == "kitchen" else {"verb": "go", "target": "north"}
         return {"emotional_shift": {}, "impulses": [{**action, "urgency": 0.9}]}
 
-    def imagine_batch(self, actions):
+    def imagine_batch(self, actions, seed=None):
         raise AssertionError("LLM imagination should be skipped")
 
     def reflect(self, payload):
@@ -223,6 +223,7 @@ def test_benchmark_runs_episodes_in_parallel(tmp_path):
     rates = run_benchmark(
         ["hunger_test"], runs=4, parallel=2,
         psyche=StatelessHungerPsyche(), log_file=str(tmp_path / "bench.csv"),
+        results_path=str(tmp_path / "results.jsonl"),
     )
     assert rates == {"hunger_test": 100.0}
     lines = (tmp_path / "bench.csv").read_text().strip().splitlines()
@@ -235,7 +236,9 @@ def test_repetitions_flag_repeated_actions(brain_factory):
         brain.insight.add_cycle(action={"verb": "examine", "target": "radio"}, success=True, impulses=[], triggers=[], mood="calm")
     for _ in range(3):
         brain.insight.add_cycle(action={"verb": "wait", "target": None}, success=True, impulses=[], triggers=[], mood="calm")
-    assert brain._repetitions() == ["examine radio (5 of the last 8 cycles)", "wait (3 of the last 8 cycles)"]
+    # Waiting is reported separately: it can be the right choice, so it is never "repetition"
+    assert brain._repetitions() == ["examine radio (5 of the last 8 cycles)"]
+    assert brain._waiting() == "3 of the last 8 cycles"
 
 
 def test_repetitions_reach_both_prompts(brain_factory):
@@ -273,7 +276,8 @@ def test_stats_count_dropped_impulses_and_fallbacks(brain_factory):
     world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
     brain = brain_factory(FallbackPsyche())
     brain.step(world)
-    assert brain.stats["psyche_calls"] == 2 and brain.stats["psyche_fallbacks"] == 1
+    # impulse (fallback) + imagination + reflection: every LLM call is counted
+    assert brain.stats["psyche_calls"] == 3 and brain.stats["psyche_fallbacks"] == 1
     assert brain.stats["impulses"] == 2 and brain.stats["impulses_dropped"] == 1
 
 
@@ -300,3 +304,84 @@ def test_llm_seed_is_sent_per_cycle(brain_factory):
     brain.step(world)
     assert [p["seed"] for p in psyche.impulse_payloads] == [3001, 3002]
     assert [p["seed"] for p in psyche.reflect_payloads] == [3001, 3002]
+
+
+def test_goal_without_steps_adopts_adams_plan(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("locked_room").CONFIG)
+    psyche = FakePsyche(reflection_extra={"new_goal_plan": ["open drawer", "take key", "unlock door", "go east"]})
+    brain = brain_factory(psyche)
+    brain.step(world)
+    goal = world.agents["adam1"]["active_goal"]
+    assert goal["name"] == "Get out of the bedroom"
+    assert [s["desc"] for s in goal["steps"]] == ["open drawer", "take key", "unlock door", "go east"]
+
+
+def test_goal_adopted_this_cycle_counts_its_first_step(brain_factory):
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    psyche = FakePsyche(decisions=[{"verb": "go", "target": "north"}],
+                        reflection_extra={"new_goal": "Eat", "new_goal_plan": ["go kitchen", "eat fridge"]})
+    brain = brain_factory(psyche)
+    brain.step(world)
+    assert brain.insight.compute_kpis()["goal_progress"] == 1.0
+
+
+def test_every_llm_call_is_seeded_and_counted(brain_factory):
+    class RecordingPsyche(FakePsyche):
+        seeds = []
+
+        def imagine_batch(self, actions, seed=None):
+            self.seeds.append(("imagine", seed))
+            return {"outcomes": ["x"] * len(actions)}
+
+        def theory_of_mind(self, **kwargs):
+            self.seeds.append(("tom", kwargs.get("seed")))
+            return {"psyche_fallback": True}  # e.g. Ollama timed out
+
+    world = TextWorld(seed=0, scenario_config=load_scenario("social_party").CONFIG)
+    psyche = RecordingPsyche()
+    brain = brain_factory(psyche)
+    brain.llm_seed = 2
+    brain.step(world)
+    assert ("imagine", 2001) in psyche.seeds and ("tom", 2001) in psyche.seeds
+    # impulse + imagination + ToM + reflection; the failed ToM call is a fallback
+    assert brain.stats["psyche_calls"] == 4 and brain.stats["psyche_fallbacks"] == 1
+    assert not brain.tom_cache  # a fallback answer is not treated as insight
+
+
+def test_jsonl_log_records_corrections_and_analysis_reads_it(tmp_path):
+    import json as _json
+    from analysis_utils import prepare_dataframe
+
+    log = tmp_path / "adam.jsonl"
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    psyche = FakePsyche(
+        decisions=[{"verb": "examine", "target": "walls"}, {"verb": "eat", "target": "fridge"}],
+        impulses=[{"verb": "take", "target": "moon", "urgency": 0.9}, {"verb": "go", "target": "north", "urgency": 0.6}],
+    )
+    brain = CognitiveLoop(str(log), LOG_HEADERS, psyche=psyche)
+    brain.step(world)
+    brain.step(world)
+    rows = [_json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 2
+    first = rows[0]
+    assert isinstance(first["action_result"], dict) and isinstance(first["impulses"], list)  # real objects, not strings
+    assert first["dropped_impulses"][0]["target"] == "moon" and "moon" in first["dropped_impulses"][0]["reason"]
+    assert first["rejected_decision"]["target"] == "walls"
+    assert rows[1]["rejected_decision"] is None
+    df = prepare_dataframe(str(log))
+    assert df["chosen_verb"].tolist() == ["go", "eat"]
+    assert df["action_success"].tolist() == [1.0, 1.0]  # went north, then ate from the kitchen fridge
+    assert "frustration" in df.columns
+
+
+def test_csv_log_still_supported(tmp_path):
+    from analysis_utils import prepare_dataframe
+
+    log = tmp_path / "adam.csv"
+    world = TextWorld(seed=0, scenario_config=load_scenario("hunger_test").CONFIG)
+    brain = CognitiveLoop(str(log), LOG_HEADERS, psyche=FakePsyche(decisions=[{"verb": "go", "target": "north"}]))
+    brain.step(world)
+    header = log.read_text().splitlines()[0]
+    assert header == ",".join(LOG_HEADERS)  # JSONL-only fields are not added as CSV columns
+    df = prepare_dataframe(str(log))
+    assert df["chosen_verb"].tolist() == ["go"] and df["action_result_parsed"][0]["success"] is True

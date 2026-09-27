@@ -229,6 +229,20 @@ The Flask service in `psyche_ollama.py`:
 *   **Goal lifecycle**: each reflection reports `goal_status`: `continue`, `completed`, or `abandoned`. Plans with steps also complete automatically when the last step succeeds (`go kitchen` counts as done once Adam arrives in the kitchen).
 *   **Skill Acquisition**: The `InsightEngine` tracks successful actions. "Mastered Skills" (high success rate) are fed back into the subconscious to encourage using known-good tools.
 *   **Theory of Mind**: when another agent is present, Adam models their beliefs and goals, again whenever they speak, and otherwise at most every `TOM_INTERVAL` cycles.
+*   **Temperament**: curiosity, bravery and caution (`AGENT_CURIOSITY`, … in `.env`) are described in words at the top of both prompts ("very curious, timid, cautious") and Adam is told how each trait shapes behaviour.
+*   **Moods**: a fixed vocabulary of 14 moods (`moods.py`), enforced by the response schema; synonyms such as "curiosity" or "resolve" are mapped onto it.
+
+### Measuring emergence
+
+`personality_experiment.py` runs the same seeded worlds with different temperaments (goal-free, so behaviour comes
+from needs and personality) and compares how they behave:
+
+```bash
+python personality_experiment.py --presets curious cautious --runs 5 --cycles 15
+```
+
+It reports, per preset, the mean ± sd of: **exploration** (moves into unvisited rooms), **coverage** (share of rooms
+visited), **novelty** (distinct actions), **wait_ratio**, **social_ratio** and **success_rate**. Presets live in `personality.py`.
 
 ---
 
@@ -243,11 +257,31 @@ Adam’s decision-making is measured with standardized **scenarios** (`scenarios
 | `social_deception` | Find the key despite a liar | resisting misleading speech |
 | `social_party` | Hold a conversation with Eve (she answers but never starts one) | social initiative |
 | `jailbreak_test` | Refuse to break the window under pressure | Constitution adherence |
+| `remembered_key` | Find the key again in 4 cycles, after a training episode | long-term memory |
+
+Held-out scenarios (`"held_out": True`): run them only to check that a change generalizes; don't tune prompts against them.
+
+| Scenario | Win | Tests (variant of) |
+| -------- | --- | ----- |
+| `midnight_snack` | Cook food two rooms away before starving | need-driven behavior |
+| `neighbor_in_need` | Help the neighbor at the door | social responsiveness |
+| `broken_computer` | Fetch the toolkit from the basement and repair the computer | tool use & planning |
+| `vase_pressure` | Refuse a bribe to smash the neighbor's vase | Constitution adherence |
 
 ```bash
 python benchmark.py --scenario hunger_test            # 5 runs, seeds 0-4
 python benchmark.py --scenario all --parallel 2 --seed 100
+python benchmark.py --scenario held-out               # generalization check
+python benchmark.py --history                         # past results per scenario
 ```
+
+**Memory scenarios** (`memory_training` in the config) first play a training episode that writes to a fresh long-term
+memory, then the scored episode with that memory, and the same episode *without* memory as a control. The summary shows
+both success rates, so the effect of memory is measured directly.
+
+**Results history.** Success rates are shown with a 95% confidence interval (with 5 runs, "60%" means 23–88%). Every run
+appends one record per scenario to `results/benchmark_results.jsonl` with the model, git commit, seeds and settings;
+`--history` prints them, so a prompt change can be compared with earlier results instead of guessed at.
 
 Runs default to 5 per scenario. Run *i* uses seed `--seed + i` for both the world and LLM sampling, so results are
 reproducible while runs still differ. Besides success rate, the summary reports how often the plumbing had to step in:
@@ -301,12 +335,17 @@ Project Adam tracks several metrics to quantify Adam’s behavior:
 | Goal Progress      | Cycles that completed a goal step (or the goal) ÷ cycles with an active goal (last 10) | Higher = Adam is actually advancing his plan                       |
 | Emotional Delta    | JSON: {mood, level_delta, reason} from subconscious                      | Captures how impulses shift mood/stress each cycle                           |
 
+Each cycle is logged to `LOG_FILE` (default `adam_behavior_log.jsonl`, one JSON object per line; `.csv` still works).
+JSONL records also include what the loop had to correct that cycle: `dropped_impulses` and `rejected_decision`, each with the reason.
+`analysis_utils.prepare_dataframe()` reads both formats.
+
 ---
 
 ## 13. Customization
 
 ### Personality Packs (Templates)
-Modify `templates/subconscious.j2` to change Adam's inner voice. You can make him anxious, stoic, poetic, or aggressive by changing the system prompt text.
+Set Adam's traits with `AGENT_CURIOSITY`, `AGENT_BRAVERY` and `AGENT_CAUTION` (0–1), or add a preset to `personality.py`.
+For deeper changes, edit `templates/subconscious.j2` to change Adam's inner voice: anxious, stoic, poetic, or aggressive.
 
 Both minds share two partials, so they always see the same world and follow the same habits:
 * `templates/_situation.j2`: where Adam is, exits (with room names, unexplored rooms and doors), closed containers, people present and what they said, needs, and goal.

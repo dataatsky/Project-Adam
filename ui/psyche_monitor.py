@@ -5,11 +5,22 @@ from tkinter.scrolledtext import ScrolledText
 from collections import deque
 import logging
 
+# Lines kept in the live console; older lines are dropped so long runs stay responsive
+LOG_MAX_LINES = 5000
+
+
+def trim_text_widget(widget, max_lines: int = LOG_MAX_LINES):
+    """Drop the oldest lines of a Tk Text widget beyond `max_lines`."""
+    lines = int(widget.index("end-1c").split(".")[0])
+    if lines > max_lines:
+        widget.delete("1.0", f"{lines - max_lines + 1}.0")
+
 
 class PsycheMonitor:
     def __init__(self, root: tk.Tk, ui_bus):
         self.root = root
         self.ui_bus = ui_bus
+        self._persist_job = None
         self.root.title("Adam's Psyche Monitor — Insights")
         self.root.geometry("1320x860")
 
@@ -295,6 +306,7 @@ class PsycheMonitor:
     def _log(self, text):
         self.log_text.config(state="normal")
         self.log_text.insert("end", text)
+        trim_text_widget(self.log_text)
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
@@ -362,16 +374,9 @@ class PsycheMonitor:
         self.ui_bus.post(self._cards, cards)
         self.ui_bus.post(self._causal, causal_line)
         self.ui_bus.post(self._threads, threads)
-        # update per-target sparkline if applicable
-        try:
-            self._update_card_spark()
-        except Exception:
-            pass
-        # draw timeline soon after insight update
-        try:
-            self._draw_timeline()
-        except Exception:
-            pass
+        # Canvas drawing must happen on the Tk main thread
+        self.ui_bus.post(self._update_card_spark)
+        self.ui_bus.post(self._draw_timeline)
 
     # ---------- helpers ----------
     def _kpi_color(self, v: float) -> str:
@@ -544,12 +549,12 @@ class PsycheMonitor:
                 w.configure(font=font)
             except Exception:
                 pass
-        self._persist_ui_prefs()
+        self._schedule_persist()
 
     def _on_log_level(self):
         lvl = getattr(logging, self.log_level.get(), logging.INFO)
         logging.getLogger().setLevel(lvl)
-        self._persist_ui_prefs()
+        self._schedule_persist()
 
     def _on_search(self):
         term = self.search_var.get()
@@ -578,7 +583,7 @@ class PsycheMonitor:
                     h.set_autoscroll(enabled)
                 except Exception:
                     pass
-        self._persist_ui_prefs()
+        self._schedule_persist()
 
     def _on_thread_select(self, _):
         # Placeholder: in future, could filter panes by selected thread
@@ -630,7 +635,7 @@ class PsycheMonitor:
                 self.nb.add(self.tab_dec, text="Decision")
             except Exception:
                 pass
-        self._persist_ui_prefs()
+        self._schedule_persist()
 
     def _on_save_snapshot(self):
         try:
@@ -664,6 +669,15 @@ class PsycheMonitor:
     def _prefs_path(self):
         import os
         return os.path.join(os.getcwd(), '.psyche_ui.json')
+
+    def _schedule_persist(self):
+        """Save preferences once things settle (a dragged slider fires dozens of events per second)."""
+        try:
+            if self._persist_job is not None:
+                self.root.after_cancel(self._persist_job)
+            self._persist_job = self.root.after(500, self._persist_ui_prefs)
+        except Exception:
+            self._persist_ui_prefs()
 
     def _persist_ui_prefs(self):
         try:
@@ -719,7 +733,7 @@ class PsycheMonitor:
                 w.config(fg=fg, bg=bg, insertbackground=fg)
         except Exception:
             pass
-        self._persist_ui_prefs()
+        self._schedule_persist()
 
     # Brain wiring and control callbacks
     def set_brain(self, brain):
@@ -735,7 +749,7 @@ class PsycheMonitor:
             pass
 
     def set_cycle(self, n: int):
-        self.cycle_var.set(f"Cycle: {n}")
+        self.ui_bus.post(self.cycle_var.set, f"Cycle: {n}")
 
     def _on_pause(self):
         if self.brain:

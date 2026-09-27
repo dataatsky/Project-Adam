@@ -146,3 +146,48 @@ def test_say_needs_words_not_a_name():
     res = world.process_action({"verb": "say", "target": "eve"})
     assert res["success"] is False and "words" in res["reason"]
     assert world.process_action({"verb": "say", "target": "Hello eve"})["success"] is True
+
+
+def test_say_rejects_names_in_any_case_or_punctuation():
+    world = TextWorld()
+    world.add_agent("eve")
+    for name in ["Eve", "EVE!", " eve. ", "Neighbor"]:
+        res = world.process_action({"verb": "say", "target": name})
+        assert res["success"] is False, name
+
+
+def test_reactive_keywords_match_whole_words_only():
+    eve = {"responses": [{"keywords": ["hi", "hey"], "say": "GREETING"}, {"keywords": ["song"], "say": "MUSIC"}]}
+    assert TextWorld._reactive_reply(eve, "What is this song?") == "MUSIC"   # "this" is not "hi"
+    assert TextWorld._reactive_reply(eve, "They left.") is None              # "they" is not "hey"
+    assert TextWorld._reactive_reply(eve, "Hi there!") == "GREETING"
+
+
+def test_say_and_wait_steps_complete_goals():
+    world = TextWorld()
+    world.add_agent("eve")
+    world.set_goal("Befriend Eve", steps=["say hello", "wait"])
+    assert world.process_action({"verb": "say", "target": "Hello Eve, nice to meet you!"}).get("goal_advanced")
+    assert world.process_action({"verb": "wait"}).get("goal_advanced")
+    assert world.agents["adam1"]["active_goal"] is None  # plan finished
+
+
+def test_heard_log_is_bounded():
+    from text_world import HEARD_LOG_LIMIT
+
+    world = TextWorld()
+    world.add_agent("eve")
+    for i in range(HEARD_LOG_LIMIT + 20):
+        world.process_action({"verb": "say", "target": f"message {i}"}, agent_id="eve")
+    log = world.agents["adam1"]["heard_log"]
+    assert len(log) == HEARD_LOG_LIMIT and log[-1]["content"] == f"message {HEARD_LOG_LIMIT + 19}"
+
+
+def test_world_moods_use_the_fixed_vocabulary():
+    world = TextWorld()
+    world.apply_emotional_shift("adam1", "Frustration", 0.1)
+    assert world.agents["adam1"]["mood"] == "frustrated"
+    world.apply_emotional_shift("adam1", "zany", 0.0)
+    assert world.agents["adam1"]["mood"] == "frustrated"  # unknown label: keep the current mood
+    world.add_agent("eve", mood="Joyful")
+    assert world.agents["eve"]["mood"] == "happy"

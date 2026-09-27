@@ -18,6 +18,8 @@ OLLAMA_THINK = os.getenv("OLLAMA_THINK", "0") not in {"0", "false", "False", ""}
 OLLAMA_MAX_TOKENS = int(os.getenv("OLLAMA_MAX_TOKENS", "512"))
 # Seconds the psyche service waits for Ollama before giving up on a call
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "120"))
+# Context window per request; prompts need ~2k tokens, and a smaller window uses much less memory
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "4096"))
 
 # Pinecone / embeddings
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") or os.getenv("PINECONE")
@@ -55,7 +57,8 @@ if not PINECONE_CLOUD or not PINECONE_REGION:
     PINECONE_REGION = PINECONE_REGION or inferred_region
 
 # Logging
-LOG_FILE = os.getenv("LOG_FILE", "adam_behavior_log.csv")
+# *.jsonl = one JSON object per cycle (default); *.csv = legacy format with JSON-encoded columns
+LOG_FILE = os.getenv("LOG_FILE", "adam_behavior_log.jsonl")
 
 # Loop pacing
 CYCLE_SLEEP = float(os.getenv("CYCLE_SLEEP", "5"))

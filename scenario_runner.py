@@ -7,6 +7,11 @@ A scenario module in `scenarios/` must define:
 - CONFIG:   world layout, agents, max_cycles, win_condition, optional fail_condition
 - SOLUTION: a list of actions that wins the scenario
 - FAILURE:  a list of actions that does not win it
+
+Optional CONFIG keys:
+- held_out:        True for scenarios reserved for checking generalization
+- memory_training: overrides (e.g. {"max_cycles": 20}) for a training episode
+                   played first with a fresh long-term memory (see benchmark.py)
 """
 import importlib.util
 from pathlib import Path
@@ -19,8 +24,12 @@ SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"
 Action = Dict[str, Optional[str]]
 
 
-def list_scenarios() -> List[str]:
-    return sorted(p.stem for p in SCENARIO_DIR.glob("*.py") if not p.stem.startswith("_"))
+def list_scenarios(held_out: Optional[bool] = None) -> List[str]:
+    """All scenario names; held_out=False for the tuning set, True for the held-out set."""
+    names = sorted(p.stem for p in SCENARIO_DIR.glob("*.py") if not p.stem.startswith("_"))
+    if held_out is None:
+        return names
+    return [n for n in names if bool(load_scenario(n).CONFIG.get("held_out")) == held_out]
 
 
 def load_scenario(name: str):

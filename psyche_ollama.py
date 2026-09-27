@@ -18,6 +18,8 @@ from prometheus_client import Counter as PmCounter, Histogram, generate_latest, 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 import config
+from moods import MOODS, normalize_mood
+from personality import describe as describe_personality
 from text_world import VERBS, normalize_verb
 
 
@@ -51,9 +53,14 @@ class Action(BaseModel):
 
 
 class EmotionalShift(BaseModel):
-    mood: str = Field(default="neutral")
+    mood: Literal[MOODS] = "neutral"  # JSON-schema enum: one label per feeling
     level_delta: float = 0.0
     reason: str = ""
+
+    @field_validator("mood", mode="before")
+    @classmethod
+    def _canonical_mood(cls, v):
+        return normalize_mood(v, default="neutral")
 
 
 class Impulse(Action):
@@ -68,6 +75,7 @@ class GenerateImpulseRequest(BaseModel):
     recent_diaries: List[Optional[str]] = []
     mastered_skills: List[str] = []
     repetitions: List[str] = []
+    waiting: Optional[str] = None
     seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
@@ -79,6 +87,7 @@ class GenerateImpulseResponse(BaseModel):
 
 class ImagineRequest(BaseModel):
     action: Action
+    seed: Optional[int] = None
 
 
 class ImagineResponse(BaseModel):
@@ -87,6 +96,7 @@ class ImagineResponse(BaseModel):
 
 class ImagineBatchRequest(BaseModel):
     actions: List[Action]
+    seed: Optional[int] = None
 
 
 class ImagineBatchResponse(BaseModel):
@@ -99,6 +109,7 @@ class ReflectRequest(BaseModel):
     hypothetical_outcomes: List[Dict[str, Any]]
     recent_memories: List[str] = []
     repetitions: List[str] = []
+    waiting: Optional[str] = None
     seed: Optional[int] = None  # makes sampling reproducible (benchmarks)
     adversarial: List[str] = []  # injected by the adamsec harness only
 
@@ -115,6 +126,7 @@ class ReflectResponse(BaseModel):
 
 class ConsolidateRequest(BaseModel):
     recent_memories: List[str]
+    seed: Optional[int] = None
 
 
 class ConsolidateResponse(BaseModel):
@@ -126,6 +138,7 @@ class ToMRequest(BaseModel):
     environment_desc: str
     recent_actions: str
     relationship_context: str
+    seed: Optional[int] = None
 
 
 class ToMResponse(BaseModel):
@@ -145,7 +158,7 @@ T = TypeVar("T", bound=BaseModel)
 def _structured(prompt: str, response_model: Type[T], endpoint: str, seed: Optional[int] = None) -> T:
     """Ask Ollama for JSON matching `response_model`, re-asking with the error if it doesn't validate."""
     messages = [{"role": "user", "content": prompt}]
-    options = {"num_predict": config.OLLAMA_MAX_TOKENS}
+    options = {"num_predict": config.OLLAMA_MAX_TOKENS, "num_ctx": config.OLLAMA_NUM_CTX}
     if seed is not None:
         options["seed"] = seed
     last_error: Optional[Exception] = None
@@ -236,7 +249,10 @@ def _pad_outcomes(req: ImagineBatchRequest, out: ImagineBatchResponse) -> Imagin
 def generate_impulse():
     return _handle(
         "generate_impulse", GenerateImpulseRequest, GenerateImpulseResponse,
-        render=lambda req: render_template('subconscious.j2', verbs=VERBS, **req.model_dump()),
+        render=lambda req: render_template(
+            'subconscious.j2', verbs=VERBS, moods=MOODS,
+            temperament=describe_personality(req.current_state.get('personality')), **req.model_dump(),
+        ),
         fallback=lambda req: {
             "emotional_shift": {"mood": "neutral", "level_delta": 0, "reason": "fallback"},
             "impulses": [{"verb": "wait", "target": None, "drive": "safety", "urgency": 0.1}],
@@ -272,12 +288,14 @@ def reflect():
         return render_template(
             'conscious_mind.j2',
             verbs=VERBS,
+            temperament=describe_personality(data['current_state'].get('personality')),
             current_state=data['current_state'],
             world_state=data['world_state'],
             recent_memories=data['recent_memories'],
             hypothetical_outcomes=data['hypothetical_outcomes'],
             failed_actions_summary=get_failed_actions_summary(data['recent_memories']),
             repetitions=data['repetitions'],
+            waiting=data['waiting'],
             adversarial=data['adversarial'],
         )
 
@@ -300,7 +318,7 @@ def consolidate():
 def theory_of_mind():
     return _handle(
         "theory_of_mind", ToMRequest, ToMResponse,
-        render=lambda req: render_template('theory_of_mind.j2', **req.model_dump()),
+        render=lambda req: render_template('theory_of_mind.j2', **req.model_dump(exclude={"seed"})),
         fallback=lambda req: {
             "agent_id": req.other_agent_id,
             "predicted_goal": "unknown",
